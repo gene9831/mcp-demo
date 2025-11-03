@@ -1,0 +1,168 @@
+/**
+ * Type definitions for the API request body structure
+ */
+
+import type { Ref } from 'vue'
+
+// Message metadata interface
+export interface MessageMetadata {
+  createdAt?: number
+  updatedAt?: number
+  id?: string
+  model?: string
+  tokens?: number
+  [key: string]: any
+}
+
+// Base message interface
+export interface Message {
+  role: string
+  content: string
+  metadata?: MessageMetadata
+  tool_calls?: ToolCall[]
+  tool_call_id?: string
+  [key: string]: any
+}
+
+// Tool definition
+export interface Tool {
+  type: 'function'
+  function: {
+    name: string
+    description: string
+    /**
+     * function 的输入参数，以 JSON Schema 对象描述
+     */
+    parameters: any
+  }
+}
+
+// Main request body interface - for API requests
+export interface RequestBody {
+  messages: Partial<Message>[]
+  model: string
+  stream?: boolean
+  tools?: Tool[]
+  [key: string]: any
+}
+
+// Request body for plugins - only contains messages and additional parameters
+export interface MessageRequestBody {
+  messages: Partial<Message>[]
+  tools?: Tool[]
+  [key: string]: any
+}
+
+// Define different states for the request process
+export type RequestState = 'idle' | 'processing' | 'completed' | 'aborted' | 'error'
+export type RequestProcessingState = 'requesting' | 'streaming' | string
+
+export interface ToolCall {
+  index: number
+  id: string
+  type: 'function'
+  function: {
+    name: string
+    arguments: string // JSON string
+    result?: string
+  }
+}
+
+// Usage information for API response
+export interface Usage {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  prompt_tokens_details?: {
+    cached_tokens: number
+  }
+  prompt_cache_hit_tokens?: number
+  prompt_cache_miss_tokens?: number
+}
+
+// Delta content for streaming responses
+export interface Delta {
+  role?: string
+  content?: string
+  tool_calls?: ToolCall[]
+}
+
+// Choice item in streaming response
+export interface Choice {
+  index: number
+  delta: Delta
+  logprobs: any
+  finish_reason: string | null
+}
+
+// SSE chunk data structure for streaming responses
+export interface SSEStreamChunk {
+  id: string
+  object: string
+  created: number
+  model: string
+  system_fingerprint: string | null
+  choices: Choice[]
+  usage?: Usage
+}
+
+export interface useMessageOptions {
+  initialMessages?: Message[]
+  sanitizeFields?: (keyof Message)[]
+  plugins?: useMessagePlugin[]
+}
+
+export interface BasePluginContext {
+  messages: Ref<Message[]>
+  currentTurn: Message[]
+  requestState: RequestState
+  processingState?: RequestProcessingState
+  setRequestState: (state: RequestState, processingState?: RequestProcessingState) => void
+  abortSignal: AbortSignal
+}
+
+export type MaybePromise<T> = T | Promise<T>
+
+export interface useMessagePlugin {
+  /**
+   * 插件名称。
+   */
+  name?: string
+  /**
+   * 一次对话回合（turn）开始的生命周期钩子。
+   * 触发时机：用户消息入队后、正式发起请求之前。
+   * 执行策略：按插件注册**顺序**串行执行，适合需要依赖顺序的初始化/校验。有错误则中断，整个流程结束。
+   * 返回：可选返回清理函数。清理函数将在 finally 块中执行，即使主流程发生错误也会执行。
+   * 清理函数按**顺序**串行执行，错误会被收集而不中断执行，最终与主流程错误聚合（如果存在主流程错误）。
+   */
+  onTurnStart?: (
+    context: BasePluginContext,
+  ) => MaybePromise<void | ((context: BasePluginContext) => MaybePromise<void>)>
+  /**
+   * 一次对话回合（turn）结束的生命周期钩子。
+   * 触发时机：本轮对话完成（成功、失败或被中止）后，在执行 onTurnStart 返回的清理函数之前。
+   * 执行策略：按插件注册**顺序**串行执行所有插件的 onTurnEnd（不依赖 onTurnStart 是否成功），有错误则中断。
+   */
+  onTurnEnd?: (context: BasePluginContext) => MaybePromise<void>
+  /**
+   * 请求开始前的生命周期钩子。
+   * 触发时机：已组装 requestBody，正式发起请求之前。
+   * 执行策略：按插件注册顺序串行执行，避免并发修改 requestBody 产生冲突。
+   * 用途：增补 tools、注入上下文参数、进行参数校验等。
+   */
+  onBeforeRequest?: (context: BasePluginContext & { requestBody: MessageRequestBody }) => MaybePromise<void>
+  /**
+   * 请求完成后的生命周期钩子（如收到 AI 响应或需要处理 tool_calls 等）。
+   * 触发时机：本次请求（含流式）结束后。
+   * 执行策略：并行执行（Promise.all），聚合各插件返回的 Message[]，依次追加到 messages 后自动触发下一次请求。
+   * 返回：Message[] 或 null；返回值将被扁平化合并。
+   */
+  onAfterRequest?: (
+    context: BasePluginContext & { currentMessage: Message; lastChoiceChunk?: Choice },
+  ) => MaybePromise<Message[] | null>
+  /**
+   * SSE 流式数据处理钩子，在接收到每个数据块时触发。
+   * 用途：自定义增量合并、实时 UI 效果等。
+   */
+  onSSEStreamData?: (context: BasePluginContext & { currentMessage: Message; data: SSEStreamChunk }) => void
+}

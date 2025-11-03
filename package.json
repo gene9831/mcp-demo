@@ -1,0 +1,46 @@
+{
+  "name": "mcp-demo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:run": "vitest run",
+    "mcp:server": "tsx mcp/mcp-http-server.ts",
+    "mcp:dev": "tsx --watch mcp/mcp-http-server.ts",
+    "mcp:test": "tsx mcp/test-http-api.ts",
+    "mcp:inspect": "mcp-inspector"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.18.1",
+    "@vueuse/core": "^13.5.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "markdown-it": "^14.1.0",
+    "pino": "^9.11.0",
+    "pino-pretty": "^13.1.1",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/inspector": "^0.16.8",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^24.5.2",
+    "@vitejs/plugin-vue": "^5.2.3",
+    "@vitejs/plugin-vue-jsx": "^5.0.1",
+    "@vitest/ui": "^3.2.4",
+    "@vue/tsconfig": "^0.7.0",
+    "less": "^4.3.0",
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.5",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4",
+    "vue-tsc": "^2.2.8"
+  }
+}

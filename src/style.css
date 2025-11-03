@@ -1,0 +1,35 @@
+:root {
+  --bg-color: #f5f5f5;
+  --text-color: #000;
+  --text-primary: #333;
+  --text-secondary: #666;
+  --text-muted: #555;
+  --container-bg: #ffffff;
+  --card-bg: #f8f9fa;
+
+  color-scheme: light dark;
+}
+
+body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  margin: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-color: #000;
+    --text-color: #fff;
+    --text-primary: #e0e0e0;
+    --text-secondary: #b0b0b0;
+    --text-muted: #888;
+    --container-bg: #1a1a1a;
+    --card-bg: #2d2d2d;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
