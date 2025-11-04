@@ -116,7 +116,7 @@ export const useMessage = (options: useMessageOptions = {}) => {
 
     const message: Message = reactive({ role: '', content: '' })
     let lastChoiceChunk: Choice | undefined = undefined
-    let messagePushed = false
+    let messageAppended = false
 
     // Pass requestBody and config separately to chatStream
     const streamResult = await chatStream(requestBody, {
@@ -124,10 +124,27 @@ export const useMessage = (options: useMessageOptions = {}) => {
       onData: (data) => {
         setRequestState('processing', 'streaming')
 
-        if (!messagePushed) {
-          messages.value.push(message)
+        if (!messageAppended) {
+          const baseContext = getBaseContext()
+          let shouldPreventDefault = false
+          const preventDefault = () => {
+            shouldPreventDefault = true
+          }
+
+          // 按顺序执行 onResponseMessageAppend 钩子
+          for (const plugin of plugins) {
+            if (plugin.onResponseMessageAppend) {
+              plugin.onResponseMessageAppend({ ...baseContext, abortSignal, currentMessage: message, preventDefault })
+            }
+          }
+
+          // 如果 preventDefault 未被调用，执行默认追加逻辑
+          if (!shouldPreventDefault) {
+            messages.value.push(message)
+          }
+
           currentTurn.push(message)
-          messagePushed = true
+          messageAppended = true
         }
 
         // 目前只选择index为0的choice

@@ -310,29 +310,34 @@ const handleListTools = async () => {
   text-transform: uppercase;
 }
 
+/* 请求中 - 黄色/橙色系 */
 .status-requesting {
-  background-color: #fff3cd;
-  color: #856404;
+  background-color: #fff4e6;
+  color: #b45309;
 }
 
+/* 流式传输中 - 蓝色系 */
 .status-streaming {
-  background-color: #d1ecf1;
-  color: #0c5460;
+  background-color: #dbeafe;
+  color: #1e40af;
 }
 
+/* 工具调用中 - 紫色系 */
 .status-calling-tools {
-  background-color: #e6f9eb;
-  color: #0f5132;
+  background-color: #f3e8ff;
+  color: #6b21a8;
 }
 
+/* 已完成 - 绿色系 */
 .status-completed {
-  background-color: #d4edda;
-  color: #155724;
+  background-color: #d1fae5;
+  color: #065f46;
 }
 
+/* 已中止/错误 - 红色系 */
 .status-aborted,
 .status-error {
-  background-color: #f8d7da;
-  color: #721c24;
+  background-color: #fee2e2;
+  color: #991b1b;
 }
 </style>
