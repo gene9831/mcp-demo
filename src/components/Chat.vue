@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useMcpClient } from '../composables/useMcpClient'
 import { useMessage } from '../composables/useMessage'
+import { lengthPlugin } from '../plugins/lengthPlugin'
 import { toolPlugin } from '../plugins/toolPlugin'
 import type { Tool } from '../types'
 import Bubble from './Bubble.vue'
@@ -25,6 +26,7 @@ const { messages, requestState, processingState, isProcessing, sendMessage, abor
         return JSON.stringify(Array.isArray(result.content) ? result.content[0] : result.content)
       },
     }),
+    lengthPlugin(),
   ],
 })
 

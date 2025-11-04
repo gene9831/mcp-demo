@@ -46,39 +46,61 @@ function fillMissingToolMessages(
 }
 
 export const toolPlugin = (
-  options: useMessagePlugin & {
+  options: Omit<useMessagePlugin, 'onAfterRequest'> & {
+    /**
+     * 在处理包含 tool_calls 的响应前调用。
+     */
     beforeCallTools?: (toolCalls: ToolCall[]) => Promise<void>
+    /**
+     * 执行单个工具调用并返回其文本结果的函数。
+     */
     callTool: (toolCall: ToolCall) => Promise<string>
+    /**
+     * 当请求被中止时用于工具调用取消的消息内容。
+     */
     toolCallCancelledContent?: string
-    toolCannFailedContent?: string
+    /**
+     * 当工具调用执行失败（抛错或拒绝）时使用的消息内容。
+     */
     toolCallFailedContent?: string
+    /**
+     * 是否在请求被中止时自动补充缺失的 tool 消息。
+     * 当 assistant 响应了 tool_calls 但未追加对应的 tool 消息时，
+     * 插件将自动补充“工具调用已取消”的 tool 消息。默认：true。
+     */
+    autoFillMissingToolMessages?: boolean
   },
 ): useMessagePlugin => {
   const {
     beforeCallTools,
     callTool,
-    toolCallCancelledContent = 'Tool call cancelled',
-    toolCannFailedContent = 'Tool call failed',
+    toolCallCancelledContent = 'Tool call cancelled.',
+    toolCallFailedContent = 'Tool call failed.',
+    autoFillMissingToolMessages = true,
     ...restOptions
   } = options
 
   return {
     name: 'tool',
     ...restOptions,
+    onTurnStart: (context) => {
+      const { currentTurn, messages } = context
+      if (autoFillMissingToolMessages) {
+        fillMissingToolMessages(currentTurn, messages, toolCallCancelledContent)
+      }
+      return restOptions.onTurnStart?.(context)
+    },
     onAfterRequest: async (context) => {
-      const { currentMessage, lastChoiceChunk, setRequestState } = context
+      const { currentMessage, lastChoiceChunk, setRequestState, appendMessage } = context
 
       if (lastChoiceChunk?.finish_reason !== 'tool_calls' || !currentMessage.tool_calls?.length) {
-        return null
+        return
       }
 
       setRequestState('processing', 'calling-tools')
       await beforeCallTools?.(currentMessage.tool_calls!)
 
       const toolCallPromises = currentMessage.tool_calls.map(async (toolCall) => {
-        console.log(`Calling tool: ${toolCall.function.name}`)
-        console.log(`Arguments:`, toolCall.function.arguments)
-
         const now = Math.floor(Date.now() / 1000)
         const toolMessage: Message = {
           role: 'tool',
@@ -93,22 +115,16 @@ export const toolPlugin = (
         try {
           toolMessage.content = await callTool(toolCall)
         } catch (error) {
-          toolMessage.content = toolCannFailedContent
+          toolMessage.content = toolCallFailedContent
         }
         toolMessage.metadata!.updatedAt = Math.floor(Date.now() / 1000)
 
         return toolMessage
       })
 
-      return Promise.all(toolCallPromises)
-    },
-    onTurnEnd: (context) => {
-      const { currentTurn, requestState, messages } = context
-      if (requestState === 'aborted') {
-        fillMissingToolMessages(currentTurn, messages, toolCallCancelledContent)
-      }
-
-      return restOptions.onTurnEnd?.(context)
+      const toolMessages = await Promise.all(toolCallPromises)
+      // 使用appendMessage api，按照插件顺序追加消息，并自动触发下一次请求
+      appendMessage(toolMessages, { request: true })
     },
   }
 }

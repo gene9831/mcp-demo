@@ -154,12 +154,28 @@ export interface useMessagePlugin {
   /**
    * 请求完成后的生命周期钩子（如收到 AI 响应或需要处理 tool_calls 等）。
    * 触发时机：本次请求（含流式）结束后。
-   * 执行策略：并行执行（Promise.all），聚合各插件返回的 Message[]，依次追加到 messages 后自动触发下一次请求。
-   * 返回：Message[] 或 null；返回值将被扁平化合并。
+   * 执行策略：并行执行（Promise.all），各插件通过 appendMessage 追加消息，消息会按插件注册顺序合并。
+   * 返回：void；不再使用返回值，所有消息追加通过 appendMessage 接口完成。
    */
   onAfterRequest?: (
-    context: BasePluginContext & { currentMessage: Message; lastChoiceChunk?: Choice },
-  ) => MaybePromise<Message[] | null>
+    context: BasePluginContext & {
+      currentMessage: Message
+      lastChoiceChunk?: Choice
+      /**
+       * 追加消息到消息列表。支持自动触发下一次请求。
+       * @param message - 要追加的消息或消息数组
+       * @param options.request - 是否自动触发下一次请求，默认为 false
+       * @param options.priority - 优先级，数字越大优先级越高，默认为 0
+       */
+      appendMessage: (message: Message | Message[], options?: { request?: boolean; priority?: number }) => void
+      /**
+       * 追加消息到消息列表，并自动触发下一次请求（相当于 appendMessage(message, { request: true })）。
+       * @param message - 要追加的消息或消息数组
+       * @param options.priority - 优先级，数字越大优先级越高，默认为 0
+       */
+      appendAndRequest: (message: Message | Message[], options?: { priority?: number }) => void
+    },
+  ) => MaybePromise<void>
   /**
    * SSE 流式数据处理钩子，在接收到每个数据块时触发。
    * 用途：自定义增量合并、实时 UI 效果等。

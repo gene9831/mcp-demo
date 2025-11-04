@@ -242,21 +242,70 @@ export const useMessage = (options: useMessageOptions = {}) => {
   }
 
   const postRequest = async (currentMessage: Message, abortSignal: AbortSignal, lastChoiceChunk?: Choice) => {
-    let msgs: Message[] = []
+    // 收集每个插件的消息组，支持优先级排序。index 用于在优先级相同时保持插件注册顺序
+    type MessageGroup = { messages: Message[]; priority: number; index: number }
+    const pluginMessageGroups: MessageGroup[] = []
+    let shouldRequest = false
 
     const baseContext = getBaseContext()
+
     const tasks = plugins
-      .map((plugin) => plugin.onAfterRequest)
-      .filter((fn) => typeof fn === 'function')
-      .map((fn) => fn({ ...baseContext, abortSignal, currentMessage, lastChoiceChunk }))
+      .map((plugin, index) => {
+        // 初始化该插件的消息组数组（即使插件没有 onAfterRequest）
+        const messageGroup: MessageGroup = { messages: [], priority: 0, index }
+        pluginMessageGroups[index] = messageGroup
 
-    const msgsArray = await makeAbortable(Promise.all(tasks), abortSignal)
-    msgs = msgsArray.flat().filter((msg): msg is Message => Boolean(msg))
+        if (!plugin.onAfterRequest) {
+          return null
+        }
 
-    if (msgs.length > 0) {
-      messages.value.push(...msgs)
-      currentTurn.push(...messages.value.slice(-msgs.length))
-      await executeRequest(abortSignal)
+        const appendMessage = (message: Message | Message[], options?: { request?: boolean; priority?: number }) => {
+          const msgs = Array.isArray(message) ? message : [message]
+          messageGroup.messages.push(...msgs)
+          messageGroup.priority = options?.priority ?? 0
+          if (options?.request) {
+            shouldRequest = true
+          }
+        }
+
+        const appendAndRequest = (message: Message | Message[], options?: { priority?: number }) => {
+          appendMessage(message, { ...options, request: true })
+        }
+
+        return plugin.onAfterRequest({
+          ...baseContext,
+          abortSignal,
+          currentMessage,
+          lastChoiceChunk,
+          appendMessage,
+          appendAndRequest,
+        })
+      })
+      .filter((task): task is Promise<void> => task !== null)
+
+    // 并行执行所有 onAfterRequest 钩子
+    await makeAbortable(Promise.all(tasks), abortSignal)
+
+    // 排序逻辑：先按优先级降序，优先级相同时按插件注册顺序（index 升序）
+    const mergedMessages = pluginMessageGroups
+      .slice()
+      .sort((a, b) => {
+        // 优先级不同时，按优先级降序排序
+        if (b.priority !== a.priority) {
+          return b.priority - a.priority
+        }
+        // 优先级相同时，保持插件注册顺序（index 小的在前）
+        return a.index - b.index
+      })
+      .flatMap((group) => group.messages)
+
+    if (mergedMessages.length > 0) {
+      messages.value.push(...mergedMessages)
+      currentTurn.push(...messages.value.slice(-mergedMessages.length))
+
+      if (shouldRequest) {
+        await executeRequest(abortSignal)
+      }
     }
   }
 
