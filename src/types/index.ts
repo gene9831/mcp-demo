@@ -118,6 +118,7 @@ export interface BasePluginContext {
   requestState: RequestState
   processingState?: RequestProcessingState
   setRequestState: (state: RequestState, processingState?: RequestProcessingState) => void
+  sanitizeMessages: (messages: Message[]) => Partial<Message>[]
   abortSignal: AbortSignal
 }
 
@@ -176,6 +177,24 @@ export interface useMessagePlugin {
       appendAndRequest: (message: Message | Message[], options?: { priority?: number }) => void
     },
   ) => MaybePromise<void>
+  /**
+   * 响应消息追加钩子，在响应消息准备添加到 messages 数组时触发。
+   * 触发时机：接收到响应数据的第一个数据块时，消息对象已创建但尚未添加到 messages 数组。
+   * 执行策略：按插件注册顺序串行执行。
+   * 默认行为：如果没有任何插件调用 preventDefault，系统会自动将消息追加到 messages 数组末尾。
+   * 自定义行为：如果插件调用了 preventDefault，则阻止默认追加逻辑，插件需要自行负责将消息添加到 messages 数组。
+   * 用途：自定义消息添加逻辑、修改消息属性、控制消息添加位置等。
+   */
+  onResponseMessageAppend?: (
+    context: BasePluginContext & {
+      currentMessage: Message
+      /**
+       * 阻止默认追加逻辑。如果调用了此函数，将不会执行默认的消息追加到 messages 数组的操作。
+       * 插件需要自行负责将消息添加到 messages 数组。
+       */
+      preventDefault: () => void
+    },
+  ) => void
   /**
    * SSE 流式数据处理钩子，在接收到每个数据块时触发。
    * 用途：自定义增量合并、实时 UI 效果等。

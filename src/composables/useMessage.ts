@@ -99,6 +99,7 @@ export const useMessage = (options: useMessageOptions = {}) => {
     requestState: requestState.value,
     processingState: processingState.value,
     setRequestState,
+    sanitizeMessages,
   })
 
   const executeRequest = async (abortSignal: AbortSignal) => {
@@ -204,7 +205,7 @@ export const useMessage = (options: useMessageOptions = {}) => {
         await executeRequest(ac.signal)
         setRequestState('completed')
       } catch (err) {
-        if (err instanceof AbortError) {
+        if (err instanceof Error && (err instanceof AbortError || err.name === 'AbortError')) {
           setRequestState('aborted')
         } else {
           throw err

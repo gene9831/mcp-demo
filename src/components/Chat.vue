@@ -2,8 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useMcpClient } from '../composables/useMcpClient'
 import { useMessage } from '../composables/useMessage'
-import { lengthPlugin } from '../plugins/lengthPlugin'
-import { toolPlugin } from '../plugins/toolPlugin'
+import { lengthPlugin, toolPlugin } from '../plugins'
 import type { Tool } from '../types'
 import Bubble from './Bubble.vue'
 
