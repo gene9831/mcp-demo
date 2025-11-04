@@ -46,7 +46,7 @@ function fillMissingToolMessages(
 }
 
 export const toolPlugin = (
-  options: Omit<useMessagePlugin, 'onAfterRequest'> & {
+  options: useMessagePlugin & {
     /**
      * 在处理包含 tool_calls 的响应前调用。
      */
@@ -125,6 +125,8 @@ export const toolPlugin = (
       const toolMessages = await Promise.all(toolCallPromises)
       // 使用appendMessage api，按照插件顺序追加消息，并自动触发下一次请求
       appendMessage(toolMessages, { request: true })
+
+      return restOptions.onAfterRequest?.(context)
     },
   }
 }
