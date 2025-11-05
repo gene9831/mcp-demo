@@ -2,52 +2,109 @@ import type { Ref } from 'vue'
 import type { Message, ToolCall, useMessagePlugin } from '../types'
 
 /**
+ * 补全缺失的工具消息（在工具调用被取消时）
+ * 遍历所有 messages，找到所有 role 为 assistant 并且 tool_calls 数组不为空的 message。
+ * 对每条这样的消息，检查其后是否存在对应的 tool 消息（通过 tool_call_id 匹配）。
+ * 如果某个 tool_call_id 没有对应的 tool 消息，则在该 assistant 消息之后插入一条"工具调用已取消"的 tool 消息。
+ * 插入操作从后往前执行，确保不影响已记录的索引位置。
+ */
+function fillMissingToolMessages(messages: Ref<Message[]>, toolCallCancelledContent: string): void {
+  // 第一阶段：从首位开始遍历，收集需要插入的信息
+  interface InsertInfo {
+    // 在哪个 assistant 消息之后插入（索引位置）
+    insertAfterIndex: number
+    // 需要插入的 tool_call_id 列表（保持原始顺序）
+    missingToolCallIds: string[]
+  }
+  const insertInfos: InsertInfo[] = []
+
+  // 从首位开始遍历 messages
+  for (let i = 0; i < messages.value.length; i++) {
+    const msg = messages.value[i]
+
+    // 找到 role 为 assistant 并且 tool_calls 数组不为空的 message
+    if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+      // 获取 tool_calls 数组中的 tool_call_id 集合
+      const toolCallIds = new Set(msg.tool_calls.map((tc) => tc.id))
+
+      // 在这条 message 之后查找对应的 tool 消息，记录已找到的 tool_call_id
+      const foundToolCallIds = new Set<string>()
+
+      // 从当前 assistant 消息之后的位置开始遍历
+      for (let j = i + 1; j < messages.value.length; j++) {
+        const toolMsg = messages.value[j]
+        // 检查是否是 tool 消息，并且 tool_call_id 在当前 assistant 消息的 tool_call_id 集合中
+        if (toolMsg.role === 'tool' && toolMsg.tool_call_id && toolCallIds.has(toolMsg.tool_call_id)) {
+          foundToolCallIds.add(toolMsg.tool_call_id)
+        }
+      }
+
+      // 找出缺失的 tool_call_id，并按照 tool_calls 数组中的顺序保留
+      const missingToolCallIds = msg.tool_calls.map((tc) => tc.id).filter((id) => !foundToolCallIds.has(id))
+
+      // 如果存在缺失的 tool_call_id，记录插入信息
+      if (missingToolCallIds.length > 0) {
+        insertInfos.push({
+          insertAfterIndex: i,
+          missingToolCallIds,
+        })
+      }
+    }
+  }
+
+  // 第二阶段：从后往前插入，这样不会影响已记录的索
+  for (let i = insertInfos.length - 1; i >= 0; i--) {
+    const { insertAfterIndex, missingToolCallIds } = insertInfos[i]
+    const cancelledMessages: Message[] = missingToolCallIds.map((toolCallId) => ({
+      role: 'tool',
+      tool_call_id: toolCallId,
+      content: toolCallCancelledContent,
+    }))
+
+    // 在 assistant 消息之后插入所有取消消息
+    messages.value.splice(insertAfterIndex + 1, 0, ...cancelledMessages)
+  }
+}
+
+/**
  * 消息排除模式：从 messages 数组中直接移除消息。
  * 使用此模式时，消息会被完全从数组中移除，不会保留在 messages 中。
  */
 export const EXCLUDE_MODE_REMOVE = 'remove' as const
 
 /**
- * 补全缺失的工具消息（在工具调用被取消时）
- * 当请求被中止时，查找当前回合（currentTurn）中最后一条包含 tool_calls 的 assistant 消息，
- * 对其中每个 tool_call_id 检查其后是否存在对应的 tool 消息；若不存在，则追加一条"工具调用已取消"的 tool 消息。
+ * 处理需要排除的工具消息
+ * 根据 excludeToolMessages 的模式，移除或标记包含 tool_calls 的 assistant 消息和对应的 tool 消息
  */
-function fillMissingToolMessages(
-  currentTurn: Message[],
+function processExcludedToolMessages(
   messages: Ref<Message[]>,
-  toolCallCancelledContent: string,
+  excludeToolMessages: boolean | typeof EXCLUDE_MODE_REMOVE,
 ): void {
-  // 在 currentTurn 中查找最后一条 assistant 消息
-  let lastAssistantMessageIndex = -1
-  for (let i = currentTurn.length - 1; i >= 0; i--) {
-    if (currentTurn[i].role === 'assistant') {
-      lastAssistantMessageIndex = i
-      break
-    }
-  }
-
-  const lastAssistantMessage = currentTurn[lastAssistantMessageIndex]
-  if (lastAssistantMessageIndex === -1 || !lastAssistantMessage.tool_calls?.length) {
-    return
-  }
-
-  const toolCallIds = lastAssistantMessage.tool_calls.map((toolCall) => toolCall.id)
-  // 找到没有对应 tool 消息的 tool_call_id 集合
-  const missingToolCallIds = toolCallIds.filter(
-    (toolCallId) =>
-      !currentTurn
-        .slice(lastAssistantMessageIndex + 1)
-        .some((msg) => msg.role === 'tool' && msg.tool_call_id === toolCallId),
+  const doNotSendAssistantMessages = messages.value.filter((msg) => msg.__do_not_send_next_turn__)
+  const doNotSendToolMessageIds = new Set(
+    doNotSendAssistantMessages.flatMap((msg) => msg.tool_calls?.map((toolCall) => toolCall.id) ?? []),
   )
 
-  // 为缺失的 tool_call_id 追加"工具调用已取消"的 tool 消息
-  if (missingToolCallIds.length > 0) {
-    const missingToolMessages = missingToolCallIds.map((toolCallId) => ({
-      role: 'tool',
-      tool_call_id: toolCallId,
-      content: toolCallCancelledContent,
-    }))
-    messages.value.push(...missingToolMessages)
+  if (excludeToolMessages === EXCLUDE_MODE_REMOVE) {
+    // 如果是 'remove' 模式，直接从 messages 中移除
+    for (let i = messages.value.length - 1; i >= 0; i--) {
+      const msg = messages.value[i]
+      if (
+        msg.__do_not_send_next_turn__ ||
+        msg.__do_not_send__ ||
+        (msg.tool_call_id && doNotSendToolMessageIds.has(msg.tool_call_id))
+      ) {
+        messages.value.splice(i, 1)
+      }
+    }
+  } else if (excludeToolMessages === true) {
+    // 如果是 true，标记为不发送
+    messages.value.forEach((msg) => {
+      if (msg.__do_not_send_next_turn__ || (msg.tool_call_id && doNotSendToolMessageIds.has(msg.tool_call_id))) {
+        msg.__do_not_send__ = true
+        delete msg.__do_not_send_next_turn__
+      }
+    })
   }
 }
 
@@ -98,29 +155,14 @@ export const toolPlugin = (
     name: 'tool',
     ...restOptions,
     onTurnStart: (context) => {
-      const { currentTurn, messages } = context
+      const { messages } = context
 
       if (autoFillMissingToolMessages) {
-        fillMissingToolMessages(currentTurn, messages, toolCallCancelledContent)
+        fillMissingToolMessages(messages, toolCallCancelledContent)
       }
 
       if (excludeToolMessagesNextTurn) {
-        if (excludeToolMessagesNextTurn === EXCLUDE_MODE_REMOVE) {
-          // 如果是 'remove' 模式，直接从 messages 中移除
-          for (let i = messages.value.length - 1; i >= 0; i--) {
-            if (messages.value[i].__do_not_send_next_turn__ || messages.value[i].__do_not_send__) {
-              messages.value.splice(i, 1)
-            }
-          }
-        } else if (excludeToolMessagesNextTurn === true) {
-          // 如果是 true，标记为不发送
-          messages.value.forEach((msg) => {
-            if (msg.__do_not_send_next_turn__) {
-              msg.__do_not_send__ = true
-              delete msg.__do_not_send_next_turn__
-            }
-          })
-        }
+        processExcludedToolMessages(messages, excludeToolMessagesNextTurn)
       }
 
       return restOptions.onTurnStart?.(context)
@@ -142,6 +184,7 @@ export const toolPlugin = (
       }
 
       if (excludeToolMessagesNextTurn) {
+        // 标记主消息，主消息下的tool_calls中的tool_call_id对应的tool消息下一轮也不发送
         currentMessage.__do_not_send_next_turn__ = true
       }
 
@@ -166,10 +209,6 @@ export const toolPlugin = (
           toolMessage.content = toolCallFailedContent
         }
         toolMessage.metadata!.updatedAt = Math.floor(Date.now() / 1000)
-
-        if (excludeToolMessagesNextTurn) {
-          toolMessage.__do_not_send_next_turn__ = true
-        }
 
         return toolMessage
       })

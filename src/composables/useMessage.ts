@@ -192,11 +192,11 @@ export const useMessage = (options: useMessageOptions = {}) => {
       // 1) onTurnStart 串行执行，有错误则中断
       const baseContextAtStart = getBaseContext()
       for (const plugin of plugins) {
-        const result = await plugin.onTurnStart?.({ ...baseContextAtStart, abortSignal: ac.signal })
+        const cleanupFn = await plugin.onTurnStart?.({ ...baseContextAtStart, abortSignal: ac.signal })
         // 如果返回了清理函数，则将其压入栈中（LIFO: 后进先出）
         // 这样在 finally 块中执行清理函数时，会按照注册顺序逆序执行
-        if (typeof result === 'function') {
-          cleanupStack.unshift(result)
+        if (typeof cleanupFn === 'function') {
+          cleanupStack.unshift(cleanupFn)
         }
       }
 
