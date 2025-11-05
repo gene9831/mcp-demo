@@ -7,10 +7,11 @@ import type {
   MessageRequestBody,
   RequestProcessingState,
   RequestState,
+  SSEStreamChunk,
   useMessageOptions,
 } from '../types'
 import { AbortError, makeAbortable } from '../utils'
-import { chatStream } from '../utils/chatStream'
+import { createChatStreamIterator } from '../utils/chatStream'
 import { combileDeltaData } from '../utils/deltaDataMerger'
 
 export const useMessage = (options: useMessageOptions = {}) => {
@@ -65,7 +66,7 @@ export const useMessage = (options: useMessageOptions = {}) => {
     }
 
     messages.value.push(...msgs)
-    currentTurn.push(...messages.value.slice(-msgs.length))
+    currentTurn.push(...msgs)
 
     // Execute the request
     await tryExecuteRequest()
@@ -119,61 +120,58 @@ export const useMessage = (options: useMessageOptions = {}) => {
     let lastChoiceChunk: Choice | undefined = undefined
     let messageAppended = false
 
-    // Pass requestBody and config separately to chatStream
-    const streamResult = await chatStream(requestBody, {
+    const streamIterator = await createChatStreamIterator<SSEStreamChunk>(requestBody, {
       signal: abortSignal,
-      onData: (data) => {
-        setRequestState('processing', 'streaming')
-
-        if (!messageAppended) {
-          const baseContext = getBaseContext()
-          let shouldPreventDefault = false
-          const preventDefault = () => {
-            shouldPreventDefault = true
-          }
-
-          // 按顺序执行 onResponseMessageAppend 钩子
-          for (const plugin of plugins) {
-            if (plugin.onResponseMessageAppend) {
-              plugin.onResponseMessageAppend({ ...baseContext, abortSignal, currentMessage: message, preventDefault })
-            }
-          }
-
-          // 如果 preventDefault 未被调用，执行默认追加逻辑
-          if (!shouldPreventDefault) {
-            messages.value.push(message)
-          }
-
-          currentTurn.push(message)
-          messageAppended = true
-        }
-
-        // 目前只选择index为0的choice
-        const choice = data.choices?.find((choice) => choice.index === 0)
-        if (choice) {
-          lastChoiceChunk = choice
-          // Ensure metadata exists
-          if (!message.metadata) {
-            message.metadata = {}
-          }
-
-          if (!message.metadata.createdAt) {
-            message.metadata.createdAt = data.created
-          }
-          message.metadata.updatedAt = Math.floor(Date.now() / 1000)
-
-          combileDeltaData(message, choice.delta)
-        }
-
-        const baseContext = getBaseContext()
-        for (const plugin of plugins) {
-          plugin.onSSEStreamData?.({ ...baseContext, abortSignal, data, currentMessage: message })
-        }
-      },
     })
 
-    if (streamResult === 'aborted') {
-      throw new AbortError('Request aborted')
+    for await (const data of streamIterator) {
+      setRequestState('processing', 'streaming')
+
+      if (!messageAppended) {
+        messageAppended = true
+
+        const baseContext = getBaseContext()
+        let shouldPreventDefault = false
+        const preventDefault = () => {
+          shouldPreventDefault = true
+        }
+
+        // 按顺序执行 onResponseMessageAppend 钩子
+        for (const plugin of plugins) {
+          if (plugin.onResponseMessageAppend) {
+            plugin.onResponseMessageAppend({ ...baseContext, abortSignal, currentMessage: message, preventDefault })
+          }
+        }
+
+        // 如果 preventDefault 未被调用，执行默认追加逻辑
+        if (!shouldPreventDefault) {
+          messages.value.push(message)
+        }
+
+        currentTurn.push(message)
+      }
+
+      // 目前只选择index为0的choice
+      const choice = data.choices?.find((choice) => choice.index === 0)
+      if (choice) {
+        lastChoiceChunk = choice
+        // Ensure metadata exists
+        if (!message.metadata) {
+          message.metadata = {}
+        }
+
+        if (!message.metadata.createdAt) {
+          message.metadata.createdAt = data.created
+        }
+        message.metadata.updatedAt = Math.floor(Date.now() / 1000)
+
+        combileDeltaData(message, choice.delta)
+      }
+
+      const baseContext = getBaseContext()
+      for (const plugin of plugins) {
+        plugin.onSSEStreamData?.({ ...baseContext, abortSignal, data, currentMessage: message })
+      }
     }
 
     await postRequest(message, abortSignal, lastChoiceChunk)
@@ -200,12 +198,15 @@ export const useMessage = (options: useMessageOptions = {}) => {
         }
       }
 
-      // 2) 主流程执行，有错误则中断
+      // 2) 主流程执行，有错误则中断（不包括中止错误）
       try {
         await executeRequest(ac.signal)
         setRequestState('completed')
       } catch (err) {
-        if (err instanceof Error && (err instanceof AbortError || err.name === 'AbortError')) {
+        // 检查是否是中止错误：优先检查当前使用的 AbortController 的信号状态
+        // 然后检查错误类型（instanceof 检查最准确）
+        // 最后通过 name 属性作为后备检查（处理跨模块/序列化等边界情况）
+        if (ac.signal.aborted || err instanceof AbortError || (err instanceof Error && err.name === 'AbortError')) {
           setRequestState('aborted')
         } else {
           throw err
@@ -277,10 +278,22 @@ export const useMessage = (options: useMessageOptions = {}) => {
           return null
         }
 
-        const appendMessage = (message: Message | Message[], options?: { request?: boolean; priority?: number }) => {
+        const appendMessage = (
+          message: Message | Message[],
+          options?: { request?: boolean; priority?: number; sync?: boolean },
+        ) => {
           const msgs = Array.isArray(message) ? message : [message]
-          messageGroup.messages.push(...msgs)
-          messageGroup.priority = options?.priority ?? 0
+
+          // 如果是同步模式，直接 push 到 messages.value
+          if (options?.sync) {
+            messages.value.push(...msgs)
+            currentTurn.push(...msgs)
+          } else {
+            // 异步模式：收集到 messageGroup，稍后统一合并
+            messageGroup.messages.push(...msgs)
+            messageGroup.priority = options?.priority ?? 0
+          }
+
           if (options?.request) {
             shouldRequest = true
           }
@@ -319,11 +332,11 @@ export const useMessage = (options: useMessageOptions = {}) => {
 
     if (mergedMessages.length > 0) {
       messages.value.push(...mergedMessages)
-      currentTurn.push(...messages.value.slice(-mergedMessages.length))
+      currentTurn.push(...mergedMessages)
+    }
 
-      if (shouldRequest) {
-        await executeRequest(abortSignal)
-      }
+    if (shouldRequest) {
+      await executeRequest(abortSignal)
     }
   }
 

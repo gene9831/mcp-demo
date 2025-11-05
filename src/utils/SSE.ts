@@ -1,28 +1,27 @@
-// SSE Stream options
-export interface SSEStreamOptions<T = any> {
-  signal?: AbortSignal
-  onData?: (data: T) => void
+// 创建 AbortError 的辅助函数
+function createAbortError(message = 'The operation was aborted'): Error {
+  const error = new Error(message)
+  error.name = 'AbortError'
+  return error
 }
 
-// Function to handle SSE stream parsing
-export const processSSEStream = async <T = any>(
+// Async generator function that yields SSE data
+export async function* createSSEStreamIterator<T = any>(
   response: Response,
-  options: SSEStreamOptions<T> = {},
-): Promise<'completed' | 'aborted'> => {
+  options: { signal?: AbortSignal } = {},
+): AsyncGenerator<T, void, unknown> {
   const reader = response.body?.getReader()
   if (!reader) {
     throw new Error('ReadableStream not supported')
   }
 
-  const { signal, onData } = options
+  const { signal } = options
   const decoder = new TextDecoder()
   let buffer = ''
 
   // Set up abort signal listener
   const abortHandler = () => {
-    reader.cancel().catch((error) => {
-      console.error('Error canceling reader:', error)
-    })
+    reader.cancel()
   }
 
   signal?.addEventListener('abort', abortHandler)
@@ -30,13 +29,27 @@ export const processSSEStream = async <T = any>(
   try {
     while (true) {
       if (signal?.aborted) {
-        return 'aborted'
+        throw createAbortError()
       }
 
-      const { done, value } = await reader.read()
+      let readResult
+      try {
+        readResult = await reader.read()
+      } catch (readError) {
+        // If read fails due to abort, throw AbortError
+        if (signal?.aborted) {
+          throw createAbortError()
+        }
+        throw readError
+      }
+
+      const { done, value } = readResult
 
       if (done) {
-        return signal?.aborted ? 'aborted' : 'completed'
+        if (signal?.aborted) {
+          throw createAbortError()
+        }
+        return
       }
 
       // Decode the chunk and add to buffer
@@ -60,12 +73,13 @@ export const processSSEStream = async <T = any>(
           const data = line.slice(6) // Remove 'data: ' prefix
 
           if (data === '[DONE]') {
-            return 'completed'
+            return
           }
 
           try {
             const parsedData = JSON.parse(data) as T
-            onData?.(parsedData)
+            // Yield the parsed data instead of calling callback
+            yield parsedData
           } catch (parseError) {
             // Log error but continue processing other events
             console.warn('Failed to parse SSE data:', data, parseError)

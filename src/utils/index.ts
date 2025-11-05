@@ -170,3 +170,21 @@ export function makeAbortable<T>(originalPromise: Promise<T>, signal: AbortSigna
     abortPromise, // 中止 Promise
   ]).finally(cleanup)
 }
+
+/**
+ * 检查值是否为异步可迭代对象
+ * @param value 要检查的值
+ * @returns 是否为异步可迭代对象
+ */
+export function isAsyncIterable<T>(value: any): value is AsyncIterable<T> {
+  return value != null && typeof value[Symbol.asyncIterator] === 'function'
+}
+
+/**
+ * 将 Promise 转换为异步迭代器
+ * @param promise 要转换的 Promise
+ * @returns 异步迭代器
+ */
+export async function* promiseToIterator<T>(promise: Promise<T>): AsyncGenerator<T, void, unknown> {
+  yield await promise
+}

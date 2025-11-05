@@ -103,6 +103,11 @@ const createMCPServer = () => {
 
   // Handle call tool request
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    // Error simulation: 20% probability of failure
+    if (Math.random() < 0.2) {
+      throw new Error('Simulated error: Random failure for testing purposes')
+    }
+
     await new Promise((resolve) => setTimeout(resolve, 1000))
     if (request.params.name === 'add') {
       const { a, b } = request.params.arguments as { a: number; b: number }

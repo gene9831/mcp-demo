@@ -4,25 +4,28 @@ import { useMcpClient } from '../composables/useMcpClient'
 import { useMessage } from '../composables/useMessage'
 import { lengthPlugin, toolPlugin } from '../plugins'
 import type { Tool } from '../types'
+import { simulateToolCallGenerator } from '../utils/mock'
 import Bubble from './Bubble.vue'
 
 // Use MCP client composable
-const { status: mcpStatus, listTools, callTool, connect } = useMcpClient()
+const { status: mcpStatus, listTools, connect } = useMcpClient()
 
 // Use the message composable
 const { messages, requestState, processingState, isProcessing, sendMessage, abortRequest } = useMessage({
   initialMessages: [{ role: 'system', content: 'You are a helpful assistant.' }],
   plugins: [
     toolPlugin({
-      onBeforeRequest: async (context) => {
-        const { requestBody } = context
-        const tools = await getTools()
-        requestBody.tools = tools
+      getTools: () => {
+        return getTools()
       },
-      callTool: async (toolCall) => {
-        const args = JSON.parse(toolCall.function.arguments)
-        const result = await callTool(toolCall.function.name, args)
-        return JSON.stringify(Array.isArray(result.content) ? result.content[0] : result.content)
+      callTool: (toolCall, { abortSignal }) => {
+        // const args = JSON.parse(toolCall.function.arguments)
+        // const result = await callTool(toolCall.function.name, args)
+        // return JSON.stringify(Array.isArray(result.content) ? result.content[0] : result.content)
+
+        const args = JSON.parse(toolCall.function.arguments) as { a: number; b: number }
+        // 返回生成器以模拟流式工具调用，传入 abortSignal 以支持终止
+        return simulateToolCallGenerator(toolCall.function.name, args, abortSignal)
       },
     }),
     lengthPlugin(),

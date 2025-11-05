@@ -1,5 +1,6 @@
-import type { Ref } from 'vue'
-import type { Message, ToolCall, useMessagePlugin } from '../types'
+import { reactive, type Ref } from 'vue'
+import type { BasePluginContext, Message, Tool, ToolCall, useMessagePlugin } from '../types'
+import { isAsyncIterable, promiseToIterator } from '../utils'
 
 /**
  * 补全缺失的工具消息（在工具调用被取消时）
@@ -111,13 +112,20 @@ function processExcludedToolMessages(
 export const toolPlugin = (
   options: useMessagePlugin & {
     /**
+     * 获取工具列表的函数。
+     */
+    getTools: () => Promise<Tool[]>
+    /**
      * 在处理包含 tool_calls 的响应前调用。
      */
-    beforeCallTools?: (toolCalls: ToolCall[]) => Promise<void>
+    beforeCallTools?: (toolCalls: ToolCall[], context: BasePluginContext & { currentMessage: Message }) => Promise<void>
     /**
      * 执行单个工具调用并返回其文本结果的函数。
      */
-    callTool: (toolCall: ToolCall) => Promise<string>
+    callTool: (
+      toolCall: ToolCall,
+      context: BasePluginContext & { currentMessage: Message },
+    ) => Promise<string> | AsyncGenerator<string>
     /**
      * 当请求被中止时用于工具调用取消的消息内容。
      */
@@ -142,6 +150,7 @@ export const toolPlugin = (
   },
 ): useMessagePlugin => {
   const {
+    getTools,
     beforeCallTools,
     callTool,
     toolCallCancelledContent = 'Tool call cancelled.',
@@ -167,17 +176,32 @@ export const toolPlugin = (
 
       return restOptions.onTurnStart?.(context)
     },
-    onBeforeRequest: (context) => {
+    onBeforeRequest: async (context) => {
       const { requestBody, messages, sanitizeMessages } = context
+
       // 只有当值为 true 时才过滤（为'remove'时消息已被移除）
       if (excludeToolMessagesNextTurn === true) {
         requestBody.messages = sanitizeMessages(messages.value.filter((msg) => !msg.__do_not_send__))
       }
 
+      const tools = await getTools?.()
+      if (tools && tools.length > 0) {
+        requestBody.tools = tools
+      }
+
       return restOptions.onBeforeRequest?.(context)
     },
     onAfterRequest: async (context) => {
-      const { currentMessage, lastChoiceChunk, setRequestState, appendMessage } = context
+      const { currentMessage, lastChoiceChunk, appendMessage, abortSignal } = context
+      const baseContext: BasePluginContext = {
+        messages: context.messages,
+        currentTurn: context.currentTurn,
+        requestState: context.requestState,
+        processingState: context.processingState,
+        setRequestState: context.setRequestState,
+        sanitizeMessages: context.sanitizeMessages,
+        abortSignal: context.abortSignal,
+      }
 
       if (lastChoiceChunk?.finish_reason !== 'tool_calls' || !currentMessage.tool_calls?.length) {
         return
@@ -188,12 +212,12 @@ export const toolPlugin = (
         currentMessage.__do_not_send_next_turn__ = true
       }
 
-      setRequestState('processing', 'calling-tools')
-      await beforeCallTools?.(currentMessage.tool_calls!)
+      baseContext.setRequestState('processing', 'calling-tools')
+      await beforeCallTools?.(currentMessage.tool_calls, { ...baseContext, currentMessage })
 
       const toolCallPromises = currentMessage.tool_calls.map(async (toolCall) => {
         const now = Math.floor(Date.now() / 1000)
-        const toolMessage: Message = {
+        const toolMessage: Message = reactive({
           role: 'tool',
           tool_call_id: toolCall.id,
           content: '',
@@ -201,21 +225,46 @@ export const toolPlugin = (
             createdAt: now,
             updatedAt: now,
           },
-        }
+        })
+
+        appendMessage(toolMessage, { sync: true, request: true })
 
         try {
-          toolMessage.content = await callTool(toolCall)
-        } catch (error) {
-          toolMessage.content = toolCallFailedContent
-        }
-        toolMessage.metadata!.updatedAt = Math.floor(Date.now() / 1000)
+          const result = callTool(toolCall, { ...baseContext, currentMessage })
 
-        return toolMessage
+          let iterator: AsyncIterable<string>
+          // 检查结果是异步迭代器还是 Promise
+          if (isAsyncIterable(result)) {
+            // 如果已经是迭代器，直接使用
+            iterator = result
+          } else {
+            // 如果是 Promise，转换为迭代器
+            iterator = promiseToIterator(result)
+          }
+
+          // 迭代并逐步拼接内容到 content
+          for await (const chunk of iterator) {
+            toolMessage.content += chunk
+            toolMessage.metadata!.updatedAt = Math.floor(Date.now() / 1000)
+          }
+        } catch (error) {
+          // 如果被 abort ，则抛出错误，主流程会处理状态
+          // 也可以不抛出错误，直接返回，主流程会自动处理 abort 场景
+          if (abortSignal.aborted) {
+            // throw error
+            return
+          }
+
+          // 其他错误视为工具调用失败，则将工具消息内容设置为失败内容
+          console.error(error)
+
+          if (toolMessage.content.length === 0) {
+            toolMessage.content = toolCallFailedContent
+          }
+        }
       })
 
-      const toolMessages = await Promise.all(toolCallPromises)
-      // 使用appendMessage api，按照插件顺序追加消息，并自动触发下一次请求
-      appendMessage(toolMessages, { request: true })
+      await Promise.all(toolCallPromises)
 
       return restOptions.onAfterRequest?.(context)
     },

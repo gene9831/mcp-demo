@@ -1,11 +1,11 @@
-import { processSSEStream } from '../processSSEStream'
-import type { MessageRequestBody, RequestBody, SSEStreamChunk } from '../types'
+import type { MessageRequestBody, RequestBody } from '../types'
+import { createSSEStreamIterator } from './SSE'
 
-export const chatStream = async (
+export const createChatStreamIterator = async <T = any>(
   requestBody: MessageRequestBody,
-  options: { signal?: AbortSignal; onData?: (data: SSEStreamChunk) => void },
+  options: { signal?: AbortSignal } = {},
 ) => {
-  const { signal, onData } = options
+  const { signal } = options
 
   const finalRequestBody: RequestBody = {
     ...requestBody,
@@ -27,8 +27,5 @@ export const chatStream = async (
     throw new Error(`HTTP error! status: ${response.status}`)
   }
 
-  return processSSEStream<SSEStreamChunk>(response, {
-    signal,
-    onData,
-  })
+  return createSSEStreamIterator<T>(response, { signal })
 }

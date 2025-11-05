@@ -166,9 +166,13 @@ export interface useMessagePlugin {
        * 追加消息到消息列表。支持自动触发下一次请求。
        * @param message - 要追加的消息或消息数组
        * @param options.request - 是否自动触发下一次请求，默认为 false
-       * @param options.priority - 优先级，数字越大优先级越高，默认为 0
+       * @param options.priority - 优先级，数字越大优先级越高，默认为 0（仅在异步模式下有效）
+       * @param options.sync - 是否同步模式，默认为 false。true 时立即 push 到 messages，false 时收集后统一合并
        */
-      appendMessage: (message: Message | Message[], options?: { request?: boolean; priority?: number }) => void
+      appendMessage: (
+        message: Message | Message[],
+        options?: { request?: boolean; priority?: number; sync?: boolean },
+      ) => void
       /**
        * 追加消息到消息列表，并自动触发下一次请求（相当于 appendMessage(message, { request: true })）。
        * @param message - 要追加的消息或消息数组
