@@ -28,8 +28,8 @@ const formatUnixTime = (timestamp: number) => {
       <span class="message-role">
         {{ role === 'tool' ? `🔧 tool` : role }}
       </span>
-      <span class="message-time" v-if="metadata?.updatedAt">
-        {{ formatUnixTime(metadata.updatedAt) }}
+      <span class="message-time" v-if="metadata?.createdAt">
+        {{ formatUnixTime(metadata.createdAt) }}
       </span>
     </div>
     <div>

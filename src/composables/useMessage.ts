@@ -139,10 +139,10 @@ export const useMessage = (options: useMessageOptions = {}) => {
           message.metadata = {}
         }
 
-        if (!message.metadata.createdAt) {
-          message.metadata.createdAt = data.created
-        }
+        const { created, choices, ...rest } = data
+        message.metadata.createdAt = created
         message.metadata.updatedAt = Math.floor(Date.now() / 1000)
+        Object.assign(message.metadata, rest)
 
         combileDeltaData(message, choice.delta)
       }

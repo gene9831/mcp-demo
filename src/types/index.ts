@@ -4,7 +4,6 @@ export interface MessageMetadata {
   updatedAt?: number
   id?: string
   model?: string
-  tokens?: number
   [key: string]: any
 }
 
