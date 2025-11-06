@@ -121,7 +121,7 @@ export const useMessage = (options: useMessageOptions = {}) => {
       signal: abortSignal,
     })
 
-    for await (const data of streamIterator) {
+    for await (const chunk of streamIterator) {
       setRequestState('processing', 'streaming')
 
       if (!messageAppended) {
@@ -131,7 +131,7 @@ export const useMessage = (options: useMessageOptions = {}) => {
       }
 
       // 目前只选择index为0的choice
-      const choice = data.choices?.find((choice) => choice.index === 0)
+      const choice = chunk.choices?.find((choice) => choice.index === 0)
       if (choice) {
         lastChoiceChunk = choice
         // Ensure metadata exists
@@ -139,7 +139,7 @@ export const useMessage = (options: useMessageOptions = {}) => {
           message.metadata = {}
         }
 
-        const { created, choices, ...rest } = data
+        const { created, choices, ...rest } = chunk
         message.metadata.createdAt = created
         message.metadata.updatedAt = Math.floor(Date.now() / 1000)
         Object.assign(message.metadata, rest)
@@ -149,7 +149,7 @@ export const useMessage = (options: useMessageOptions = {}) => {
 
       const baseContext = getBaseContext()
       for (const plugin of plugins) {
-        plugin.onSSEStreamData?.({ ...baseContext, abortSignal, data, currentMessage: message })
+        plugin.onSSEChunk?.({ ...baseContext, abortSignal, chunk, currentMessage: message })
       }
     }
 

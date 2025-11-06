@@ -181,12 +181,28 @@ export function isAsyncIterable<T>(value: any): value is AsyncIterable<T> {
 }
 
 /**
- * 将 Promise 转换为异步迭代器
+ * 将 Promise 转换为异步生成器
  * @param promise 要转换的 Promise
- * @returns 异步迭代器
+ * @returns 异步生成器
  */
-export async function* promiseToIterator<T>(promise: Promise<T>): AsyncGenerator<T, void, unknown> {
+export async function* promiseToAsyncGenerator<T>(promise: Promise<T>): AsyncGenerator<T, void, unknown> {
   yield await promise
+}
+
+/**
+ * 将 Promise 或异步迭代器统一转换为异步生成器
+ * @param value Promise 或异步迭代器
+ * @returns 异步生成器
+ */
+export function toAsyncGenerator<T>(value: Promise<T> | AsyncIterable<T>): AsyncGenerator<T, void, unknown> {
+  if (isAsyncIterable(value)) {
+    // 如果已经是异步迭代器，直接返回（AsyncGenerator 是 AsyncIterable 的子类型）
+    // 使用类型断言，因为运行时 AsyncIterable 通常就是 AsyncGenerator
+    return value as AsyncGenerator<T, void, unknown>
+  } else {
+    // 如果是 Promise，转换为异步生成器
+    return promiseToAsyncGenerator(value)
+  }
 }
 
 /**
@@ -195,10 +211,7 @@ export async function* promiseToIterator<T>(promise: Promise<T>): AsyncGenerator
  * @param fields 要提取的字段数组
  * @returns 只包含指定字段的新对象
  */
-export function pickFields<T extends Record<string, any>, K extends keyof T>(
-  obj: T,
-  fields: K[],
-): Pick<T, K> {
+export function pickFields<T extends Record<string, any>, K extends keyof T>(obj: T, fields: K[]): Pick<T, K> {
   const result = {} as Pick<T, K>
   for (const field of fields) {
     if (field in obj) {

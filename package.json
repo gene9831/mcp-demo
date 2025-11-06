@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.18.1",
+    "@opentiny/tiny-robot": "file:../tiny-robot/packages/components/opentiny-tiny-robot-0.3.0-rc.5.tgz",
     "@vueuse/core": "^13.5.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",

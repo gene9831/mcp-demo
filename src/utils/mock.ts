@@ -1,11 +1,37 @@
-// Generator function to simulate tool call with streaming output
 // 生成器函数，模拟工具调用并流式输出
+
+// 函数参数选项接口
+interface SimulateToolCallOptions {
+  signal?: AbortSignal
+  useDeltaMode?: boolean
+}
+
+// 函数重载：根据 useDeltaMode 推断返回类型
+export function simulateToolCallGenerator(
+  toolName: string,
+  args: { a: number; b: number },
+  options: { signal?: AbortSignal; useDeltaMode: true },
+): AsyncGenerator<Record<string, any>, void, unknown>
+export function simulateToolCallGenerator(
+  toolName: string,
+  args: { a: number; b: number },
+  options?: { signal?: AbortSignal; useDeltaMode?: false },
+): AsyncGenerator<string, void, unknown>
+export function simulateToolCallGenerator(
+  toolName: string,
+  args: { a: number; b: number },
+  options?: SimulateToolCallOptions,
+): AsyncGenerator<string | Record<string, any>, void, unknown>
 export async function* simulateToolCallGenerator(
   toolName: string,
   args: { a: number; b: number },
-  signal?: AbortSignal,
-): AsyncGenerator<string, void, unknown> {
-  // Error simulation: 20% probability of failure
+  options?: SimulateToolCallOptions,
+): AsyncGenerator<string | Record<string, any>, void, unknown> {
+  const { signal, useDeltaMode } = options ?? {}
+
+  await new Promise((resolve) => setTimeout(resolve, 1000))
+
+  // 错误模拟
   if (Math.random() < 0.2) {
     throw new Error('Simulated error: Random failure for testing purposes')
   }
@@ -27,14 +53,35 @@ export async function* simulateToolCallGenerator(
     throw new Error(`Unknown tool: ${toolName}`)
   }
 
-  // Create a longer result string with full equation and description
-  // 创建包含完整算式和说明的长字符串
-  const resultString = `Result: ${args.a} ${operator} ${args.b} = ${result}`
+  // Delta 模式：输出 delta 对象
+  if (useDeltaMode) {
+    // 第一次输出：包含 type 和空 text 的初始 delta 对象
+    yield { type: 'text', text: '' }
+    // 将结果转换为字符串，每个字符作为一个 delta 对象输出
+    const resultString = String(result)
+    for (let i = 0; i < resultString.length; i++) {
+      // 每次迭代前检查是否被终止
+      if (signal?.aborted) {
+        throw new Error('Tool call was aborted')
+      }
 
-  // Yield each character with 100ms delay
+      await new Promise((resolve) => setTimeout(resolve, 100))
+
+      // 延迟后再次检查
+      if (signal?.aborted) {
+        throw new Error('Tool call was aborted')
+      }
+
+      yield { text: resultString[i] }
+    }
+    return
+  }
+
+  // 默认模式：输出字符串字符
+  const resultString = `{"type":"text","text":"${result}"}`
+
   // 每100ms输出一个字符
   for (let i = 0; i < resultString.length; i++) {
-    // Check if aborted before each iteration
     // 每次迭代前检查是否被终止
     if (signal?.aborted) {
       throw new Error('Tool call was aborted')
@@ -42,7 +89,6 @@ export async function* simulateToolCallGenerator(
 
     await new Promise((resolve) => setTimeout(resolve, 100))
 
-    // Check again after delay
     // 延迟后再次检查
     if (signal?.aborted) {
       throw new Error('Tool call was aborted')

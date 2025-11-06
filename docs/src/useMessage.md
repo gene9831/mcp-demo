@@ -28,7 +28,7 @@ sendMessage/send (用户调用)
 │     ↓
 │  发起请求，开始流式响应
 │     ↓
-│  3. onSSEStreamData (每个 SSE 数据块触发)
+│  3. onSSEChunk (每个 SSE 数据块触发)
 │     ↓
 │  流式响应结束
 │     ↓
@@ -76,11 +76,11 @@ sendMessage/send (用户调用)
   - `setRequestMessages(messages)`: 设置请求消息列表，会自动根据 `requestMessageFields` 过滤字段
 - **注意**: 递归请求会再次执行此钩子
 
-### 3. onSSEStreamData
+### 3. onSSEChunk
 
 - **时机**: 接收到每个 SSE 数据块时
 - **执行方式**: 每个数据块都会触发所有插件
-- **上下文参数**: `currentMessage`（当前正在构建的消息对象）、`data`（SSE 数据块）
+- **上下文参数**: `currentMessage`（当前正在构建的消息对象）、`chunk`（SSE 数据块）
 - **用途**: 自定义增量合并、实时 UI 效果等
 
 ### 4. onAfterRequest

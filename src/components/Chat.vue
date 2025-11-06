@@ -1,11 +1,12 @@
 <script setup lang="ts">
+import { TrBubbleList, TrBubbleProvider, type BubbleContentRenderer, type BubbleRoleConfig } from '@opentiny/tiny-robot'
 import { computed, nextTick, ref, watch } from 'vue'
 import { useMcpClient } from '../composables/useMcpClient'
 import { useMessage } from '../composables/useMessage'
-import { lengthPlugin, toolPlugin } from '../plugins'
+import { lengthPlugin } from '../plugins'
 import type { Tool } from '../types'
 import { simulateToolCallGenerator } from '../utils/mock'
-import Bubble from './Bubble.vue'
+import { myToolPlugin } from './myToolPlugin'
 
 // Use MCP client composable
 const { status: mcpStatus, listTools, connect } = useMcpClient()
@@ -14,18 +15,24 @@ const { status: mcpStatus, listTools, connect } = useMcpClient()
 const { messages, requestState, processingState, isProcessing, sendMessage, abortRequest } = useMessage({
   initialMessages: [{ role: 'system', content: 'You are a helpful assistant.' }],
   plugins: [
-    toolPlugin({
+    myToolPlugin({
       getTools: () => {
         return getTools()
       },
-      callTool: (toolCall, { abortSignal }) => {
-        // const args = JSON.parse(toolCall.function.arguments)
-        // const result = await callTool(toolCall.function.name, args)
-        // return JSON.stringify(Array.isArray(result.content) ? result.content[0] : result.content)
-
+      // callTool: async function (toolCall) {
+      //   const args = JSON.parse(toolCall.function.arguments)
+      //   const result = await callTool(toolCall.function.name, args)
+      //   return JSON.stringify(Array.isArray(result.content) ? result.content[0] : result.content)
+      // },
+      callTool: async function* (toolCall, { abortSignal }) {
         const args = JSON.parse(toolCall.function.arguments) as { a: number; b: number }
-        // 返回生成器以模拟流式工具调用，传入 abortSignal 以支持终止
-        return simulateToolCallGenerator(toolCall.function.name, args, abortSignal)
+        yield { arguments: args }
+        for await (const chunk of simulateToolCallGenerator(toolCall.function.name, args, {
+          signal: abortSignal,
+          useDeltaMode: true,
+        })) {
+          yield { result: chunk }
+        }
       },
     }),
     lengthPlugin(),
@@ -103,6 +110,23 @@ const handleListTools = async () => {
     console.error('Failed to list tools:', error)
   }
 }
+
+const roles: Record<string, BubbleRoleConfig> = {
+  user: {
+    placement: 'end',
+  },
+  assistant: {
+    placement: 'start',
+    customContentField: 'renderContent',
+  },
+  system: {
+    hidden: true,
+  },
+}
+
+const contentRenderers: Record<string, BubbleContentRenderer> = {}
+
+const loading = computed(() => isProcessing.value && messages.value.slice(-1).pop()?.role === 'user')
 </script>
 
 <template>
@@ -113,16 +137,9 @@ const handleListTools = async () => {
         <div v-if="messages.length === 0" class="empty-state">
           <p>Start a conversation by typing a message below</p>
         </div>
-        <Bubble
-          v-for="(message, index) in messages"
-          :key="index"
-          :role="message.role"
-          :content="message.content"
-          :hidden="message.role === 'system'"
-          :metadata="message.metadata"
-          :tool_calls="message.tool_calls"
-          :align="message.role === 'user' ? 'right' : 'left'"
-        />
+        <TrBubbleProvider :content-renderers="contentRenderers">
+          <TrBubbleList :items="messages" :roles="roles" loading-role="assistant" :loading="loading" />
+        </TrBubbleProvider>
       </div>
 
       <div style="height: 142.5px"></div>
@@ -168,7 +185,22 @@ const handleListTools = async () => {
 </template>
 
 <style scoped>
+:deep(.tr-bubble) {
+  &[data-role='user'] {
+    --tr-bubble-content-bg: #e3f2fd;
+  }
+  &[data-role='assistant'] {
+    --tr-bubble-content-bg: transparent;
+    --tr-bubble-content-padding: 0px;
+  }
+  &[data-role='loading'] {
+    --tr-bubble-content-bg: transparent;
+  }
+}
+
 .chat-container {
+  --tr-bubble-list-padding: 0px;
+
   max-width: 800px;
   margin: 0 auto;
   display: flex;
@@ -188,9 +220,9 @@ const handleListTools = async () => {
   overflow-y: auto;
   margin: 20px 0;
   padding: 15px;
-  background: white;
+  /* background: white;
   border-radius: 6px;
-  border: 1px solid #ddd;
+  border: 1px solid #ddd; */
   height: 60vh;
   min-height: 60vh;
 }

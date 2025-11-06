@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import './style.css'
+import '@opentiny/tiny-robot/dist/style.css'
 
 // Register service worker
 // if ('serviceWorker' in navigator) {

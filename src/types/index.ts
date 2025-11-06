@@ -207,8 +207,8 @@ export interface useMessagePlugin {
     },
   ) => void
   /**
-   * SSE 流式数据处理钩子，在接收到每个数据块时触发。
+   * SSE 数据块处理钩子，在接收到每个数据块时触发。
    * 用途：自定义增量合并、实时 UI 效果等。
    */
-  onSSEStreamData?: (context: BasePluginContext & { currentMessage: Message; data: SSEStreamChunk }) => void
+  onSSEChunk?: (context: BasePluginContext & { currentMessage: Message; chunk: SSEStreamChunk }) => void
 }

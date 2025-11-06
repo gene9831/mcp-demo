@@ -1,6 +1,7 @@
 import { reactive } from 'vue'
 import type { BasePluginContext, Message, Tool, ToolCall, useMessagePlugin } from '../types'
-import { isAsyncIterable, promiseToIterator } from '../utils'
+import { toAsyncGenerator } from '../utils'
+import { combileDeltaData } from '../utils/deltaDataMerger'
 
 /**
  * 补全缺失的工具消息（在工具调用被取消时）
@@ -9,7 +10,11 @@ import { isAsyncIterable, promiseToIterator } from '../utils'
  * 如果某个 tool_call_id 没有对应的 tool 消息，则在该 assistant 消息之后插入一条"工具调用已取消"的 tool 消息。
  * 插入操作从后往前执行，确保不影响已记录的索引位置。
  */
-function fillMissingToolMessages(messages: Message[], toolCallCancelledContent: string): void {
+function fillMissingToolMessages(
+  messages: Message[],
+  cancelledContent: string,
+  extraFields?: Record<string, any>,
+): void {
   // 第一阶段：从首位开始遍历，收集需要插入的信息
   interface InsertInfo {
     // 在哪个 assistant 消息之后插入（索引位置）
@@ -59,7 +64,8 @@ function fillMissingToolMessages(messages: Message[], toolCallCancelledContent: 
     const cancelledMessages: Message[] = missingToolCallIds.map((toolCallId) => ({
       role: 'tool',
       tool_call_id: toolCallId,
-      content: toolCallCancelledContent,
+      content: cancelledContent,
+      ...extraFields,
     }))
 
     // 在 assistant 消息之后插入所有取消消息
@@ -125,7 +131,7 @@ export const toolPlugin = (
     callTool: (
       toolCall: ToolCall,
       context: BasePluginContext & { currentMessage: Message },
-    ) => Promise<string> | AsyncGenerator<string>
+    ) => Promise<string | Record<string, any>> | AsyncGenerator<string | Record<string, any>>
     /**
      * 当请求被中止时用于工具调用取消的消息内容。
      */
@@ -137,9 +143,14 @@ export const toolPlugin = (
     /**
      * 是否在请求被中止时自动补充缺失的 tool 消息。
      * 当 assistant 响应了 tool_calls 但未追加对应的 tool 消息时，
-     * 插件将自动补充"工具调用已取消"的 tool 消息。默认：true。
+     * 插件将自动补充"工具调用已取消"的 tool 消息。默认：false。
      */
     autoFillMissingToolMessages?: boolean
+    /**
+     * 为自动补充的缺失工具消息添加的额外字段。
+     * 这些字段会被合并到创建的 tool 消息对象中。
+     */
+    missingToolMessageFields?: Record<string, any>
     /**
      * 是否在下一轮对话中，排除包含 tool_calls 的 assistant 消息和对应的 tool 消息，只保留结果。
      * - 当为 `true` 时，这些消息会被标记为不发送，不会包含在下一次请求的 messages 中。
@@ -147,6 +158,25 @@ export const toolPlugin = (
      * 默认：false。
      */
     excludeToolMessagesNextTurn?: boolean | typeof EXCLUDE_MODE_REMOVE
+    /**
+     * 工具消息内容块处理钩子，在接收到每个数据块时触发。
+     * 触发时机：工具调用返回流式数据时，每个chunk会触发此钩子。
+     * 默认行为：如果没有任何插件调用 preventDefault，将使用默认逻辑更新 currentMessage.content：
+     * - 如果chunk是字符串，直接拼接到现有content
+     * - 如果chunk是对象，会解析现有content为JSON，合并数据，然后序列化
+     * 自定义行为：如果插件调用了 preventDefault，则阻止默认更新逻辑，插件需要自行更新 currentMessage.content。
+     *
+     * @param context.chunk - 新的数据块，可能是字符串或对象
+     * @param context.currentMessage - 当前工具消息对象，可直接修改其content属性
+     * @param context.preventDefault - 阻止默认更新逻辑，插件需自行更新 currentMessage.content
+     */
+    onToolMessageChunk?: (
+      context: BasePluginContext & {
+        chunk: string | Record<string, any>
+        currentMessage: Message
+        preventDefault: () => void
+      },
+    ) => void
   },
 ): useMessagePlugin => {
   const {
@@ -155,8 +185,10 @@ export const toolPlugin = (
     callTool,
     toolCallCancelledContent = 'Tool call cancelled.',
     toolCallFailedContent = 'Tool call failed.',
-    autoFillMissingToolMessages = true,
+    autoFillMissingToolMessages = false,
+    missingToolMessageFields,
     excludeToolMessagesNextTurn = false,
+    onToolMessageChunk,
     ...restOptions
   } = options
 
@@ -167,7 +199,7 @@ export const toolPlugin = (
       const { messages } = context
 
       if (autoFillMissingToolMessages) {
-        fillMissingToolMessages(messages, toolCallCancelledContent)
+        fillMissingToolMessages(messages, toolCallCancelledContent, missingToolMessageFields)
       }
 
       if (excludeToolMessagesNextTurn) {
@@ -220,22 +252,39 @@ export const toolPlugin = (
 
         appendMessage(toolMessage, { request: true })
 
+        const contextWithToolMessage = { ...context, currentMessage: toolMessage }
         try {
-          const result = callTool(toolCall, { ...context, currentMessage })
+          const result = callTool(toolCall, contextWithToolMessage)
 
-          let iterator: AsyncIterable<string>
-          // 检查结果是异步迭代器还是 Promise
-          if (isAsyncIterable(result)) {
-            // 如果已经是迭代器，直接使用
-            iterator = result
-          } else {
-            // 如果是 Promise，转换为迭代器
-            iterator = promiseToIterator(result)
-          }
+          // 将 Promise 或异步迭代器统一转换为异步生成器
+          const iterator = toAsyncGenerator(result)
 
           // 迭代并逐步拼接内容到 content
           for await (const chunk of iterator) {
-            toolMessage.content += chunk
+            let shouldPreventDefault = false
+            const preventDefault = () => {
+              shouldPreventDefault = true
+            }
+
+            // 如果提供了 onToolMessageChunk 钩子，则调用
+            onToolMessageChunk?.({ ...contextWithToolMessage, chunk, preventDefault })
+
+            // 如果未调用 preventDefault，则使用默认逻辑
+            if (!shouldPreventDefault) {
+              // 默认逻辑：字符串拼接或 JSON 合并
+              if (typeof chunk === 'string') {
+                toolMessage.content += chunk
+              } else {
+                let parsedContent: Record<string, any> = {}
+                try {
+                  parsedContent = JSON.parse(toolMessage.content || '{}')
+                } catch (error) {
+                  console.warn(error)
+                }
+                toolMessage.content = JSON.stringify(combileDeltaData(parsedContent, chunk))
+              }
+            }
+
             toolMessage.metadata!.updatedAt = Math.floor(Date.now() / 1000)
           }
         } catch (error) {
