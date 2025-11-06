@@ -188,3 +188,22 @@ export function isAsyncIterable<T>(value: any): value is AsyncIterable<T> {
 export async function* promiseToIterator<T>(promise: Promise<T>): AsyncGenerator<T, void, unknown> {
   yield await promise
 }
+
+/**
+ * 从对象中提取指定字段，返回一个新对象
+ * @param obj 源对象
+ * @param fields 要提取的字段数组
+ * @returns 只包含指定字段的新对象
+ */
+export function pickFields<T extends Record<string, any>, K extends keyof T>(
+  obj: T,
+  fields: K[],
+): Pick<T, K> {
+  const result = {} as Pick<T, K>
+  for (const field of fields) {
+    if (field in obj) {
+      result[field] = obj[field]
+    }
+  }
+  return result
+}

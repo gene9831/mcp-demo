@@ -1,9 +1,3 @@
-/**
- * Type definitions for the API request body structure
- */
-
-import type { Ref } from 'vue'
-
 // Message metadata interface
 export interface MessageMetadata {
   createdAt?: number
@@ -108,17 +102,18 @@ export interface SSEStreamChunk {
 
 export interface useMessageOptions {
   initialMessages?: Message[]
-  sanitizeFields?: (keyof Message)[]
+  requestMessageFields?: (keyof Message)[]
   plugins?: useMessagePlugin[]
 }
 
 export interface BasePluginContext {
-  messages: Ref<Message[]>
+  messages: Message[]
   currentTurn: Message[]
   requestState: RequestState
   processingState?: RequestProcessingState
+  requestMessageFields: (keyof Message)[]
+  plugins: useMessagePlugin[]
   setRequestState: (state: RequestState, processingState?: RequestProcessingState) => void
-  sanitizeMessages: (messages: Message[]) => Partial<Message>[]
   abortSignal: AbortSignal
 }
 
@@ -151,7 +146,16 @@ export interface useMessagePlugin {
    * 执行策略：按插件注册顺序串行执行，避免并发修改 requestBody 产生冲突。
    * 用途：增补 tools、注入上下文参数、进行参数校验等。
    */
-  onBeforeRequest?: (context: BasePluginContext & { requestBody: MessageRequestBody }) => MaybePromise<void>
+  onBeforeRequest?: (
+    context: BasePluginContext & {
+      requestBody: MessageRequestBody
+      /**
+       * 设置请求消息列表。会自动根据 `requestMessageFields` 过滤消息字段，只保留指定的字段。
+       * @param messages - 要设置的完整消息列表
+       */
+      setRequestMessages: (messages: Message[]) => void
+    },
+  ) => MaybePromise<void>
   /**
    * 请求完成后的生命周期钩子（如收到 AI 响应或需要处理 tool_calls 等）。
    * 触发时机：本次请求（含流式）结束后。
@@ -167,30 +171,34 @@ export interface useMessagePlugin {
        * @param message - 要追加的消息或消息数组
        * @param options.request - 是否自动触发下一次请求，默认为 false
        * @param options.priority - 优先级，数字越大优先级越高，默认为 0（仅在异步模式下有效）
-       * @param options.sync - 是否同步模式，默认为 false。true 时立即 push 到 messages，false 时收集后统一合并
+       * @param options.async - 是否异步模式，默认为 false。true 时收集后统一合并并按优先级排序，false 时立即 push 到 messages
        */
       appendMessage: (
         message: Message | Message[],
-        options?: { request?: boolean; priority?: number; sync?: boolean },
+        options?: { request?: boolean; priority?: number; async?: boolean },
       ) => void
       /**
        * 追加消息到消息列表，并自动触发下一次请求（相当于 appendMessage(message, { request: true })）。
        * @param message - 要追加的消息或消息数组
-       * @param options.priority - 优先级，数字越大优先级越高，默认为 0
+       * @param options.priority - 优先级，数字越大优先级越高，默认为 0（仅在异步模式下有效）
+       * @param options.async - 是否异步模式，默认为 false。true 时收集后统一合并并按优先级排序，false 时立即 push 到 messages
        */
-      appendAndRequest: (message: Message | Message[], options?: { priority?: number }) => void
+      appendAndRequest: (message: Message | Message[], options?: { priority?: number; async?: boolean }) => void
     },
   ) => MaybePromise<void>
   /**
-   * 响应消息追加钩子，在响应消息准备添加到 messages 数组时触发。
-   * 触发时机：接收到响应数据的第一个数据块时，消息对象已创建但尚未添加到 messages 数组。
-   * 执行策略：按插件注册顺序串行执行。
+   * 消息追加钩子，在消息准备添加到 messages 数组时触发。
+   * 触发时机：响应消息和插件追加的消息等在添加到 messages 数组之前（不包括通过 send 或 sendMessage 发送的用户消息）。
+   * 执行策略：按插件注册顺序串行执行（每个消息单独触发）。
    * 默认行为：如果没有任何插件调用 preventDefault，系统会自动将消息追加到 messages 数组末尾。
    * 自定义行为：如果插件调用了 preventDefault，则阻止默认追加逻辑，插件需要自行负责将消息添加到 messages 数组。
-   * 用途：自定义消息添加逻辑、修改消息属性、控制消息添加位置等。
+   * 用途：自定义消息添加逻辑、修改消息属性、控制消息添加位置、消息过滤等。
    */
-  onResponseMessageAppend?: (
+  onMessageAppend?: (
     context: BasePluginContext & {
+      /**
+       * 当前待追加的消息对象。插件可以直接修改此对象的属性，或调用 preventDefault() 阻止默认追加行为。
+       */
       currentMessage: Message
       /**
        * 阻止默认追加逻辑。如果调用了此函数，将不会执行默认的消息追加到 messages 数组的操作。

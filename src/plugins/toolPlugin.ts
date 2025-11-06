@@ -1,4 +1,4 @@
-import { reactive, type Ref } from 'vue'
+import { reactive } from 'vue'
 import type { BasePluginContext, Message, Tool, ToolCall, useMessagePlugin } from '../types'
 import { isAsyncIterable, promiseToIterator } from '../utils'
 
@@ -9,7 +9,7 @@ import { isAsyncIterable, promiseToIterator } from '../utils'
  * 如果某个 tool_call_id 没有对应的 tool 消息，则在该 assistant 消息之后插入一条"工具调用已取消"的 tool 消息。
  * 插入操作从后往前执行，确保不影响已记录的索引位置。
  */
-function fillMissingToolMessages(messages: Ref<Message[]>, toolCallCancelledContent: string): void {
+function fillMissingToolMessages(messages: Message[], toolCallCancelledContent: string): void {
   // 第一阶段：从首位开始遍历，收集需要插入的信息
   interface InsertInfo {
     // 在哪个 assistant 消息之后插入（索引位置）
@@ -20,8 +20,8 @@ function fillMissingToolMessages(messages: Ref<Message[]>, toolCallCancelledCont
   const insertInfos: InsertInfo[] = []
 
   // 从首位开始遍历 messages
-  for (let i = 0; i < messages.value.length; i++) {
-    const msg = messages.value[i]
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]
 
     // 找到 role 为 assistant 并且 tool_calls 数组不为空的 message
     if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
@@ -32,8 +32,8 @@ function fillMissingToolMessages(messages: Ref<Message[]>, toolCallCancelledCont
       const foundToolCallIds = new Set<string>()
 
       // 从当前 assistant 消息之后的位置开始遍历
-      for (let j = i + 1; j < messages.value.length; j++) {
-        const toolMsg = messages.value[j]
+      for (let j = i + 1; j < messages.length; j++) {
+        const toolMsg = messages[j]
         // 检查是否是 tool 消息，并且 tool_call_id 在当前 assistant 消息的 tool_call_id 集合中
         if (toolMsg.role === 'tool' && toolMsg.tool_call_id && toolCallIds.has(toolMsg.tool_call_id)) {
           foundToolCallIds.add(toolMsg.tool_call_id)
@@ -63,7 +63,7 @@ function fillMissingToolMessages(messages: Ref<Message[]>, toolCallCancelledCont
     }))
 
     // 在 assistant 消息之后插入所有取消消息
-    messages.value.splice(insertAfterIndex + 1, 0, ...cancelledMessages)
+    messages.splice(insertAfterIndex + 1, 0, ...cancelledMessages)
   }
 }
 
@@ -78,34 +78,34 @@ export const EXCLUDE_MODE_REMOVE = 'remove' as const
  * 根据 excludeToolMessages 的模式，移除或标记包含 tool_calls 的 assistant 消息和对应的 tool 消息
  */
 function processExcludedToolMessages(
-  messages: Ref<Message[]>,
+  messages: Message[],
   excludeToolMessages: boolean | typeof EXCLUDE_MODE_REMOVE,
 ): void {
-  const doNotSendAssistantMessages = messages.value.filter((msg) => msg.__do_not_send_next_turn__)
+  const doNotSendAssistantMessages = messages.filter((msg) => msg.__do_not_send_next_turn__)
   const doNotSendToolMessageIds = new Set(
     doNotSendAssistantMessages.flatMap((msg) => msg.tool_calls?.map((toolCall) => toolCall.id) ?? []),
   )
 
   if (excludeToolMessages === EXCLUDE_MODE_REMOVE) {
     // 如果是 'remove' 模式，直接从 messages 中移除
-    for (let i = messages.value.length - 1; i >= 0; i--) {
-      const msg = messages.value[i]
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i]
       if (
         msg.__do_not_send_next_turn__ ||
         msg.__do_not_send__ ||
         (msg.tool_call_id && doNotSendToolMessageIds.has(msg.tool_call_id))
       ) {
-        messages.value.splice(i, 1)
+        messages.splice(i, 1)
       }
     }
   } else if (excludeToolMessages === true) {
     // 如果是 true，标记为不发送
-    messages.value.forEach((msg) => {
+    for (const msg of messages) {
       if (msg.__do_not_send_next_turn__ || (msg.tool_call_id && doNotSendToolMessageIds.has(msg.tool_call_id))) {
         msg.__do_not_send__ = true
         delete msg.__do_not_send_next_turn__
       }
-    })
+    }
   }
 }
 
@@ -177,11 +177,11 @@ export const toolPlugin = (
       return restOptions.onTurnStart?.(context)
     },
     onBeforeRequest: async (context) => {
-      const { requestBody, messages, sanitizeMessages } = context
+      const { messages, requestBody, setRequestMessages } = context
 
       // 只有当值为 true 时才过滤（为'remove'时消息已被移除）
       if (excludeToolMessagesNextTurn === true) {
-        requestBody.messages = sanitizeMessages(messages.value.filter((msg) => !msg.__do_not_send__))
+        setRequestMessages(messages.filter((msg) => !msg.__do_not_send__))
       }
 
       const tools = await getTools?.()
@@ -192,16 +192,7 @@ export const toolPlugin = (
       return restOptions.onBeforeRequest?.(context)
     },
     onAfterRequest: async (context) => {
-      const { currentMessage, lastChoiceChunk, appendMessage, abortSignal } = context
-      const baseContext: BasePluginContext = {
-        messages: context.messages,
-        currentTurn: context.currentTurn,
-        requestState: context.requestState,
-        processingState: context.processingState,
-        setRequestState: context.setRequestState,
-        sanitizeMessages: context.sanitizeMessages,
-        abortSignal: context.abortSignal,
-      }
+      const { currentMessage, lastChoiceChunk, appendMessage, abortSignal, setRequestState } = context
 
       if (lastChoiceChunk?.finish_reason !== 'tool_calls' || !currentMessage.tool_calls?.length) {
         return
@@ -212,8 +203,8 @@ export const toolPlugin = (
         currentMessage.__do_not_send_next_turn__ = true
       }
 
-      baseContext.setRequestState('processing', 'calling-tools')
-      await beforeCallTools?.(currentMessage.tool_calls, { ...baseContext, currentMessage })
+      setRequestState('processing', 'calling-tools')
+      await beforeCallTools?.(currentMessage.tool_calls, { ...context, currentMessage })
 
       const toolCallPromises = currentMessage.tool_calls.map(async (toolCall) => {
         const now = Math.floor(Date.now() / 1000)
@@ -227,10 +218,10 @@ export const toolPlugin = (
           },
         })
 
-        appendMessage(toolMessage, { sync: true, request: true })
+        appendMessage(toolMessage, { request: true })
 
         try {
-          const result = callTool(toolCall, { ...baseContext, currentMessage })
+          const result = callTool(toolCall, { ...context, currentMessage })
 
           let iterator: AsyncIterable<string>
           // 检查结果是异步迭代器还是 Promise

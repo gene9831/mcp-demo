@@ -10,14 +10,14 @@ import type {
   SSEStreamChunk,
   useMessageOptions,
 } from '../types'
-import { AbortError, makeAbortable } from '../utils'
+import { AbortError, makeAbortable, pickFields } from '../utils'
 import { createChatStreamIterator } from '../utils/chatStream'
 import { combileDeltaData } from '../utils/deltaDataMerger'
 
 export const useMessage = (options: useMessageOptions = {}) => {
   const {
     initialMessages = [],
-    sanitizeFields = ['role', 'content', 'tool_calls', 'tool_call_id'],
+    requestMessageFields = ['role', 'content', 'tool_calls', 'tool_call_id'],
     plugins = [],
   } = options
 
@@ -73,15 +73,7 @@ export const useMessage = (options: useMessageOptions = {}) => {
   }
 
   const sanitizeMessages = (messages: Message[]) => {
-    return messages.map((message) => {
-      const sanitizedMessage: Partial<Message> = {}
-      for (const field of sanitizeFields) {
-        if (field in message) {
-          sanitizedMessage[field] = message[field] as any
-        }
-      }
-      return sanitizedMessage
-    })
+    return messages.map((message) => pickFields(message, requestMessageFields))
   }
 
   const setRequestState = (state: RequestState, pState?: RequestProcessingState) => {
@@ -95,12 +87,13 @@ export const useMessage = (options: useMessageOptions = {}) => {
 
   // Create base context for plugins
   const getBaseContext = (): Omit<BasePluginContext, 'abortSignal'> => ({
-    messages,
+    messages: messages.value,
     currentTurn,
     requestState: requestState.value,
     processingState: processingState.value,
+    requestMessageFields,
+    plugins,
     setRequestState,
-    sanitizeMessages,
   })
 
   const executeRequest = async (abortSignal: AbortSignal) => {
@@ -110,10 +103,14 @@ export const useMessage = (options: useMessageOptions = {}) => {
       messages: sanitizeMessages(messages.value),
     }
 
+    const setRequestMessages = (messages: Message[]) => {
+      requestBody.messages = sanitizeMessages(messages)
+    }
+
     // Allow plugins to modify request body (e.g., add tools)
     const baseContext = getBaseContext()
     for (const plugin of plugins) {
-      await plugin.onBeforeRequest?.({ ...baseContext, abortSignal, requestBody })
+      await plugin.onBeforeRequest?.({ ...baseContext, abortSignal, requestBody, setRequestMessages })
     }
 
     const message: Message = reactive({ role: '', content: '' })
@@ -130,25 +127,7 @@ export const useMessage = (options: useMessageOptions = {}) => {
       if (!messageAppended) {
         messageAppended = true
 
-        const baseContext = getBaseContext()
-        let shouldPreventDefault = false
-        const preventDefault = () => {
-          shouldPreventDefault = true
-        }
-
-        // 按顺序执行 onResponseMessageAppend 钩子
-        for (const plugin of plugins) {
-          if (plugin.onResponseMessageAppend) {
-            plugin.onResponseMessageAppend({ ...baseContext, abortSignal, currentMessage: message, preventDefault })
-          }
-        }
-
-        // 如果 preventDefault 未被调用，执行默认追加逻辑
-        if (!shouldPreventDefault) {
-          messages.value.push(message)
-        }
-
-        currentTurn.push(message)
+        innerAppendMessage(message)
       }
 
       // 目前只选择index为0的choice
@@ -187,6 +166,7 @@ export const useMessage = (options: useMessageOptions = {}) => {
     let mainError: unknown = null
 
     try {
+      setRequestState('processing', 'requesting')
       // 1) onTurnStart 串行执行，有错误则中断
       const baseContextAtStart = getBaseContext()
       for (const plugin of plugins) {
@@ -280,18 +260,17 @@ export const useMessage = (options: useMessageOptions = {}) => {
 
         const appendMessage = (
           message: Message | Message[],
-          options?: { request?: boolean; priority?: number; sync?: boolean },
+          options?: { request?: boolean; priority?: number; async?: boolean },
         ) => {
           const msgs = Array.isArray(message) ? message : [message]
 
-          // 如果是同步模式，直接 push 到 messages.value
-          if (options?.sync) {
-            messages.value.push(...msgs)
-            currentTurn.push(...msgs)
-          } else {
-            // 异步模式：收集到 messageGroup，稍后统一合并
+          // 如果是异步模式，收集到 messageGroup，稍后统一合并
+          if (options?.async) {
             messageGroup.messages.push(...msgs)
             messageGroup.priority = options?.priority ?? 0
+          } else {
+            // 同步模式（默认）：直接 push 到 messages.value
+            innerAppendMessage(msgs)
           }
 
           if (options?.request) {
@@ -299,7 +278,7 @@ export const useMessage = (options: useMessageOptions = {}) => {
           }
         }
 
-        const appendAndRequest = (message: Message | Message[], options?: { priority?: number }) => {
+        const appendAndRequest = (message: Message | Message[], options?: { priority?: number; async?: boolean }) => {
           appendMessage(message, { ...options, request: true })
         }
 
@@ -331,12 +310,41 @@ export const useMessage = (options: useMessageOptions = {}) => {
       .flatMap((group) => group.messages)
 
     if (mergedMessages.length > 0) {
-      messages.value.push(...mergedMessages)
-      currentTurn.push(...mergedMessages)
+      innerAppendMessage(mergedMessages)
     }
 
     if (shouldRequest) {
       await executeRequest(abortSignal)
+    }
+  }
+
+  const innerAppendMessage = (message: Message | Message[]) => {
+    const msgs = Array.isArray(message) ? message : [message]
+
+    for (const msg of msgs) {
+      let shouldPreventDefault = false
+      const preventDefault = () => {
+        shouldPreventDefault = true
+      }
+
+      const baseContext = getBaseContext()
+      for (const plugin of plugins) {
+        if (plugin.onMessageAppend) {
+          plugin.onMessageAppend({
+            ...baseContext,
+            abortSignal: abortController!.signal,
+            currentMessage: msg,
+            preventDefault,
+          })
+        }
+      }
+
+      // 如果 preventDefault 未被调用，执行默认追加逻辑
+      if (!shouldPreventDefault) {
+        messages.value.push(msg)
+      }
+
+      currentTurn.push(msg)
     }
   }
 
