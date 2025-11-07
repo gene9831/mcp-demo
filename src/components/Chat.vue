@@ -1,5 +1,11 @@
 <script setup lang="ts">
-import { TrBubbleList, TrBubbleProvider, type BubbleContentRenderer, type BubbleRoleConfig } from '@opentiny/tiny-robot'
+import {
+  BubbleMarkdownContentRenderer,
+  TrBubbleList,
+  TrBubbleProvider,
+  type BubbleContentRenderer,
+  type BubbleRoleConfig,
+} from '@opentiny/tiny-robot'
 import { computed, nextTick, ref, watch } from 'vue'
 import { useMcpClient } from '../composables/useMcpClient'
 import { useMessage } from '../composables/useMessage'
@@ -9,7 +15,7 @@ import { simulateToolCallGenerator } from '../utils/mock'
 import { myToolPlugin } from './myToolPlugin'
 
 // Use MCP client composable
-const { status: mcpStatus, listTools, connect } = useMcpClient()
+const { status: mcpStatus, listTools, callTool, connect } = useMcpClient()
 
 // Use the message composable
 const { messages, requestState, processingState, isProcessing, sendMessage, abortRequest } = useMessage({
@@ -21,12 +27,11 @@ const { messages, requestState, processingState, isProcessing, sendMessage, abor
       },
       // callTool: async function (toolCall) {
       //   const args = JSON.parse(toolCall.function.arguments)
-      //   const result = await callTool(toolCall.function.name, args)
-      //   return JSON.stringify(Array.isArray(result.content) ? result.content[0] : result.content)
+      //   return await callTool(toolCall.function.name, args)
       // },
       callTool: async function* (toolCall, { abortSignal }) {
         const args = JSON.parse(toolCall.function.arguments) as { a: number; b: number }
-        yield { arguments: args }
+        // yield { arguments: args }
         for await (const chunk of simulateToolCallGenerator(toolCall.function.name, args, {
           signal: abortSignal,
           useDeltaMode: true,
@@ -124,7 +129,9 @@ const roles: Record<string, BubbleRoleConfig> = {
   },
 }
 
-const contentRenderers: Record<string, BubbleContentRenderer> = {}
+const contentRenderers: Record<string, BubbleContentRenderer> = {
+  markdown: new BubbleMarkdownContentRenderer(),
+}
 
 const loading = computed(() => isProcessing.value && messages.value.slice(-1).pop()?.role === 'user')
 </script>

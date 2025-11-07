@@ -1,42 +1,6 @@
 import { reactive } from 'vue'
 import { toolPlugin } from '../plugins'
-import type { BasePluginContext, Message, ToolCall } from '../types'
-import { toAsyncGenerator } from '../utils'
-
-function wrapCallToolWithErrorHandling(
-  callTool: (
-    toolCall: ToolCall,
-    context: BasePluginContext & { currentMessage: Message },
-  ) => Promise<string | Record<string, any>> | AsyncGenerator<string | Record<string, any>>,
-) {
-  return async function* (
-    toolCall: ToolCall,
-    context: BasePluginContext & { currentMessage: Message },
-  ): AsyncGenerator<string | Record<string, any>, void, unknown> {
-    const { currentMessage, abortSignal } = context
-
-    try {
-      const result = callTool(toolCall, context)
-
-      // 将 Promise 或异步迭代器统一转换为异步生成器
-      const iterator = toAsyncGenerator(result)
-
-      for await (const chunk of iterator) {
-        yield chunk
-      }
-      context.currentMessage.status = 'success'
-    } catch (error) {
-      if (abortSignal.aborted) {
-        currentMessage.status = 'cancelled'
-        yield { error: 'Tool call cancelled.' }
-      } else {
-        currentMessage.status = 'failed'
-        yield { error: 'Tool call failed.' }
-      }
-      throw error
-    }
-  }
-}
+import type { Message } from '../types'
 
 export const myToolPlugin = (options: Pick<Parameters<typeof toolPlugin>[0], 'getTools' | 'callTool'>) => {
   const { getTools, callTool } = options
@@ -47,7 +11,7 @@ export const myToolPlugin = (options: Pick<Parameters<typeof toolPlugin>[0], 'ge
     toolCallCancelledContent: '{"error":"Tool call cancelled."}',
     toolCallFailedContent: '{"error":"Tool call failed."}',
     getTools,
-    callTool: wrapCallToolWithErrorHandling(callTool),
+    callTool,
     onTurnStart: () => {
       firstResponseMessage = null
     },
@@ -61,7 +25,14 @@ export const myToolPlugin = (options: Pick<Parameters<typeof toolPlugin>[0], 'ge
         lastMessage.flatRenderContent &&
         Array.isArray(lastMessage.renderContent)
       ) {
-        setRequestMessages(messages.slice(0, -1).concat(lastMessage.renderContent))
+        setRequestMessages(
+          messages.slice(0, -1).concat(
+            lastMessage.renderContent.map(({ content, originalContent, ...rest }) => ({
+              ...rest,
+              content: originalContent || content,
+            })),
+          ),
+        )
       }
     },
     onMessageAppend: (context) => {
@@ -80,16 +51,45 @@ export const myToolPlugin = (options: Pick<Parameters<typeof toolPlugin>[0], 'ge
       } else {
         firstResponseMessage.renderContent!.push(currentMessage)
       }
+    },
+    onSSEChunk: (context) => {
+      const { currentMessage } = context
 
-      if (currentMessage.role === 'tool') {
-        Object.assign(currentMessage, {
-          type: 'tool',
-          name: currentMessage.metadata?.function?.name || 'Tool',
-          status: 'running',
-          formatPretty: true,
-          defaultOpen: true,
-        })
+      if (!currentMessage.type && currentMessage.role === 'assistant') {
+        currentMessage.type = 'markdown'
       }
+    },
+    onToolCallStart: (toolCall, { currentMessage }) => {
+      Object.assign(currentMessage, {
+        type: 'tool',
+        name: toolCall.function.name,
+        content: JSON.stringify({ arguments: JSON.parse(toolCall.function.arguments) }),
+        status: 'running',
+        formatPretty: true,
+        defaultOpen: true,
+      })
+    },
+    onToolCallEnd: (_toolCall, { currentMessage, status }) => {
+      currentMessage.status = status
+
+      let content: Record<string, any> = {}
+      try {
+        content = JSON.parse(currentMessage.content)
+      } catch {}
+
+      if (status !== 'success') {
+        if (status === 'failed') {
+          content.error = 'Tool call failed.'
+        } else if (status === 'cancelled') {
+          content.error = 'Tool call cancelled.'
+        }
+
+        currentMessage.content = JSON.stringify(content)
+      }
+
+      const originalContent = content.error || content.result
+      currentMessage.originalContent =
+        typeof originalContent === 'string' ? originalContent : JSON.stringify(originalContent)
     },
     onTurnEnd: () => {
       if (firstResponseMessage) {

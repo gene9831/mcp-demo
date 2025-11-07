@@ -133,6 +133,32 @@ export const toolPlugin = (
       context: BasePluginContext & { currentMessage: Message },
     ) => Promise<string | Record<string, any>> | AsyncGenerator<string | Record<string, any>>
     /**
+     * 工具调用开始时的回调函数。
+     * 触发时机：工具消息已创建并追加后，调用 callTool 之前触发。
+     * @param toolCall - 工具调用对象
+     * @param context - 插件上下文，包含当前工具消息
+     */
+    onToolCallStart?: (
+      toolCall: ToolCall,
+      context: BasePluginContext & { currentMessage: Message },
+    ) => void
+    /**
+     * 工具调用结束时的回调函数。
+     * 触发时机：工具调用完成（成功、失败或取消）时触发。
+     * @param toolCall - 工具调用对象
+     * @param context - 插件上下文，包含当前工具消息、状态和错误信息
+     * @param context.status - 工具调用状态：'success' | 'failed' | 'cancelled'
+     * @param context.error - 当状态为 'failed' 或 'cancelled' 时，可能包含错误信息
+     */
+    onToolCallEnd?: (
+      toolCall: ToolCall,
+      context: BasePluginContext & {
+        currentMessage: Message
+        status: 'success' | 'failed' | 'cancelled'
+        error?: Error
+      },
+    ) => void
+    /**
      * 当请求被中止时用于工具调用取消的消息内容。
      */
     toolCallCancelledContent?: string
@@ -183,6 +209,8 @@ export const toolPlugin = (
     getTools,
     beforeCallTools,
     callTool,
+    onToolCallStart,
+    onToolCallEnd,
     toolCallCancelledContent = 'Tool call cancelled.',
     toolCallFailedContent = 'Tool call failed.',
     autoFillMissingToolMessages = false,
@@ -253,6 +281,8 @@ export const toolPlugin = (
         appendMessage(toolMessage, { request: true })
 
         const contextWithToolMessage = { ...context, currentMessage: toolMessage }
+
+        onToolCallStart?.(toolCall, contextWithToolMessage)
         try {
           const result = callTool(toolCall, contextWithToolMessage)
 
@@ -287,10 +317,15 @@ export const toolPlugin = (
 
             toolMessage.metadata!.updatedAt = Math.floor(Date.now() / 1000)
           }
+
+          onToolCallEnd?.(toolCall, { ...contextWithToolMessage, status: 'success' })
         } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error))
+
           // 如果被 abort ，则抛出错误，主流程会处理状态
           // 也可以不抛出错误，直接返回，主流程会自动处理 abort 场景
           if (abortSignal.aborted) {
+            onToolCallEnd?.(toolCall, { ...contextWithToolMessage, status: 'cancelled', error: err })
             // throw error
             return
           }
@@ -301,6 +336,8 @@ export const toolPlugin = (
           if (toolMessage.content.length === 0) {
             toolMessage.content = toolCallFailedContent
           }
+
+          onToolCallEnd?.(toolCall, { ...contextWithToolMessage, status: 'failed', error: err })
         }
       })
 
