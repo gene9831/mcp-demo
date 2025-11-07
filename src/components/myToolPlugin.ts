@@ -6,6 +6,7 @@ export const myToolPlugin = (options: Pick<Parameters<typeof toolPlugin>[0], 'ge
   const { getTools, callTool } = options
 
   let firstResponseMessage: Message | null = null
+  let reasoningMessage: Message | null = null
 
   return toolPlugin({
     toolCallCancelledContent: '{"error":"Tool call cancelled."}',
@@ -18,6 +19,8 @@ export const myToolPlugin = (options: Pick<Parameters<typeof toolPlugin>[0], 'ge
     onBeforeRequest: (context) => {
       const { messages, setRequestMessages } = context
 
+      reasoningMessage = null
+
       const lastMessage = messages.slice(-1).pop()
       if (
         lastMessage &&
@@ -27,16 +30,51 @@ export const myToolPlugin = (options: Pick<Parameters<typeof toolPlugin>[0], 'ge
       ) {
         setRequestMessages(
           messages.slice(0, -1).concat(
-            lastMessage.renderContent.map(({ content, originalContent, ...rest }) => ({
-              ...rest,
-              content: originalContent || content,
-            })),
+            lastMessage.renderContent
+              .map(({ content, originalContent, ...rest }) => ({
+                ...rest,
+                content: originalContent || content,
+              }))
+              .filter((msg) => Boolean(msg.role)),
           ),
         )
       }
     },
+    onSSEChunk: (context) => {
+      const { currentMessage, messages } = context
+
+      if (!reasoningMessage && 'reasoning_content' in currentMessage) {
+        reasoningMessage = reactive({
+          role: '',
+          type: 'collapsible-text',
+          title:'思考过程',
+          content: '',
+          defaultOpen: true,
+        })
+
+        if (!firstResponseMessage) {
+          firstResponseMessage = reactive({
+            role: 'assistant',
+            content: '',
+            renderContent: [reasoningMessage],
+            flatRenderContent: true,
+          })
+          messages.push(firstResponseMessage)
+        } else {
+          firstResponseMessage.renderContent!.push(reasoningMessage)
+        }
+      }
+
+      if (reasoningMessage) {
+        reasoningMessage.content = currentMessage.reasoning_content
+      }
+    },
     onMessageAppend: (context) => {
       const { currentMessage, messages, preventDefault } = context
+
+      if (!currentMessage.type && currentMessage.role === 'assistant') {
+        currentMessage.type = 'markdown'
+      }
 
       preventDefault()
 
@@ -52,13 +90,7 @@ export const myToolPlugin = (options: Pick<Parameters<typeof toolPlugin>[0], 'ge
         firstResponseMessage.renderContent!.push(currentMessage)
       }
     },
-    onSSEChunk: (context) => {
-      const { currentMessage } = context
 
-      if (!currentMessage.type && currentMessage.role === 'assistant') {
-        currentMessage.type = 'markdown'
-      }
-    },
     onToolCallStart: (toolCall, { currentMessage }) => {
       Object.assign(currentMessage, {
         type: 'tool',

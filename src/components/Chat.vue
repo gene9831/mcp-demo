@@ -198,7 +198,7 @@ const loading = computed(() => isProcessing.value && messages.value.slice(-1).po
   }
   &[data-role='assistant'] {
     --tr-bubble-content-bg: transparent;
-    --tr-bubble-content-padding: 0px;
+    --tr-bubble-content-padding: 10px;
   }
   &[data-role='loading'] {
     --tr-bubble-content-bg: transparent;
@@ -225,8 +225,8 @@ const loading = computed(() => isProcessing.value && messages.value.slice(-1).po
 .messages-container {
   flex: 1;
   overflow-y: auto;
-  margin: 20px 0;
-  padding: 15px;
+  margin: 16px 0;
+  /* padding: 15px; */
   /* background: white;
   border-radius: 6px;
   border: 1px solid #ddd; */

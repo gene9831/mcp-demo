@@ -124,12 +124,6 @@ export const useMessage = (options: useMessageOptions = {}) => {
     for await (const chunk of streamIterator) {
       setRequestState('processing', 'streaming')
 
-      if (!messageAppended) {
-        messageAppended = true
-
-        innerAppendMessage(message)
-      }
-
       // 目前只选择index为0的choice
       const choice = chunk.choices?.find((choice) => choice.index === 0)
       if (choice) {
@@ -150,6 +144,12 @@ export const useMessage = (options: useMessageOptions = {}) => {
       const baseContext = getBaseContext()
       for (const plugin of plugins) {
         plugin.onSSEChunk?.({ ...baseContext, abortSignal, chunk, currentMessage: message })
+      }
+
+      if (!messageAppended) {
+        messageAppended = true
+
+        innerAppendMessage(message)
       }
     }
 

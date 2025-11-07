@@ -86,8 +86,10 @@ export const EXCLUDE_MODE_REMOVE = 'remove' as const
 function processExcludedToolMessages(
   messages: Message[],
   excludeToolMessages: boolean | typeof EXCLUDE_MODE_REMOVE,
+  doNotSendNextTurnSymbol: symbol,
+  doNotSendSymbol: symbol,
 ): void {
-  const doNotSendAssistantMessages = messages.filter((msg) => msg.__do_not_send_next_turn__)
+  const doNotSendAssistantMessages = messages.filter((msg) => msg[doNotSendNextTurnSymbol])
   const doNotSendToolMessageIds = new Set(
     doNotSendAssistantMessages.flatMap((msg) => msg.tool_calls?.map((toolCall) => toolCall.id) ?? []),
   )
@@ -97,8 +99,8 @@ function processExcludedToolMessages(
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i]
       if (
-        msg.__do_not_send_next_turn__ ||
-        msg.__do_not_send__ ||
+        msg[doNotSendNextTurnSymbol] ||
+        msg[doNotSendSymbol] ||
         (msg.tool_call_id && doNotSendToolMessageIds.has(msg.tool_call_id))
       ) {
         messages.splice(i, 1)
@@ -107,9 +109,9 @@ function processExcludedToolMessages(
   } else if (excludeToolMessages === true) {
     // 如果是 true，标记为不发送
     for (const msg of messages) {
-      if (msg.__do_not_send_next_turn__ || (msg.tool_call_id && doNotSendToolMessageIds.has(msg.tool_call_id))) {
-        msg.__do_not_send__ = true
-        delete msg.__do_not_send_next_turn__
+      if (msg[doNotSendNextTurnSymbol] || (msg.tool_call_id && doNotSendToolMessageIds.has(msg.tool_call_id))) {
+        msg[doNotSendSymbol] = true
+        delete msg[doNotSendNextTurnSymbol]
       }
     }
   }
@@ -138,10 +140,7 @@ export const toolPlugin = (
      * @param toolCall - 工具调用对象
      * @param context - 插件上下文，包含当前工具消息
      */
-    onToolCallStart?: (
-      toolCall: ToolCall,
-      context: BasePluginContext & { currentMessage: Message },
-    ) => void
+    onToolCallStart?: (toolCall: ToolCall, context: BasePluginContext & { currentMessage: Message }) => void
     /**
      * 工具调用结束时的回调函数。
      * 触发时机：工具调用完成（成功、失败或取消）时触发。
@@ -220,6 +219,9 @@ export const toolPlugin = (
     ...restOptions
   } = options
 
+  const DO_NOT_SEND_NEXT_TURN = Symbol('doNotSendNextTurn')
+  const DO_NOT_SEND = Symbol('doNotSend')
+
   return {
     name: 'tool',
     ...restOptions,
@@ -231,7 +233,7 @@ export const toolPlugin = (
       }
 
       if (excludeToolMessagesNextTurn) {
-        processExcludedToolMessages(messages, excludeToolMessagesNextTurn)
+        processExcludedToolMessages(messages, excludeToolMessagesNextTurn, DO_NOT_SEND_NEXT_TURN, DO_NOT_SEND)
       }
 
       return restOptions.onTurnStart?.(context)
@@ -241,7 +243,7 @@ export const toolPlugin = (
 
       // 只有当值为 true 时才过滤（为'remove'时消息已被移除）
       if (excludeToolMessagesNextTurn === true) {
-        setRequestMessages(messages.filter((msg) => !msg.__do_not_send__))
+        setRequestMessages(messages.filter((msg) => !msg[DO_NOT_SEND]))
       }
 
       const tools = await getTools?.()
@@ -260,7 +262,7 @@ export const toolPlugin = (
 
       if (excludeToolMessagesNextTurn) {
         // 标记主消息，主消息下的tool_calls中的tool_call_id对应的tool消息下一轮也不发送
-        currentMessage.__do_not_send_next_turn__ = true
+        currentMessage[DO_NOT_SEND_NEXT_TURN] = true
       }
 
       setRequestState('processing', 'calling-tools')

@@ -9,11 +9,12 @@ export const createChatStreamIterator = async <T = any>(
 
   const finalRequestBody: RequestBody = {
     ...requestBody,
-    model: 'deepseek-chat',
+    model: 'qwen-plus',
+    enable_thinking: true,
     stream: true,
   }
 
-  const response = await fetch('https://api.deepseek.com/chat/completions', {
+  const response = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

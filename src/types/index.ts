@@ -15,6 +15,7 @@ export interface Message {
   tool_calls?: ToolCall[]
   tool_call_id?: string
   [key: string]: any
+  [key: symbol]: any
 }
 
 // Tool definition
@@ -78,6 +79,7 @@ export interface Delta {
   role?: string
   content?: string
   tool_calls?: ToolCall[]
+  [key: string]: any
 }
 
 // Choice item in streaming response
